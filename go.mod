@@ -3,6 +3,7 @@ module github.com/0xsj/canopy-backend
 go 1.25.6
 
 require (
+	github.com/coder/websocket v1.8.14
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/nats-io/nats.go v1.48.0
 )
