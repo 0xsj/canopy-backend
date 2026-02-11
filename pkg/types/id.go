@@ -70,50 +70,50 @@ func (id *ID[T]) UnmarshalJSON(data []byte) error {
 // The phantom type parameter prevents mixing IDs across entity types.
 
 type (
-	userTag         struct{}
-	workspaceTag    struct{}
-	seedTag         struct{}
-	leafTag         struct{}
-	branchTag       struct{}
-	connectionTag   struct{}
-	threadTag       struct{}
-	checkpointTag   struct{}
-	deliverableTag  struct{}
+	userTag        struct{}
+	workspaceTag   struct{}
+	seedTag        struct{}
+	leafTag        struct{}
+	branchTag      struct{}
+	connectionTag  struct{}
+	threadTag      struct{}
+	checkpointTag  struct{}
+	deliverableTag struct{}
 )
 
 type (
-	UserID         = ID[userTag]
-	WorkspaceID    = ID[workspaceTag]
-	SeedID         = ID[seedTag]
-	LeafID         = ID[leafTag]
-	BranchID       = ID[branchTag]
-	ConnectionID   = ID[connectionTag]
-	ThreadID       = ID[threadTag]
-	CheckpointID   = ID[checkpointTag]
-	DeliverableID  = ID[deliverableTag]
+	UserID        = ID[userTag]
+	WorkspaceID   = ID[workspaceTag]
+	SeedID        = ID[seedTag]
+	LeafID        = ID[leafTag]
+	BranchID      = ID[branchTag]
+	ConnectionID  = ID[connectionTag]
+	ThreadID      = ID[threadTag]
+	CheckpointID  = ID[checkpointTag]
+	DeliverableID = ID[deliverableTag]
 )
 
 // ID prefixes — used by generators and parsers.
 const (
-	PrefixUser         = "usr"
-	PrefixWorkspace    = "ws"
-	PrefixSeed         = "seed"
-	PrefixLeaf         = "leaf"
-	PrefixBranch       = "br"
-	PrefixConnection   = "conn"
-	PrefixThread       = "thr"
-	PrefixCheckpoint   = "chk"
-	PrefixDeliverable  = "del"
+	PrefixUser        = "usr"
+	PrefixWorkspace   = "ws"
+	PrefixSeed        = "seed"
+	PrefixLeaf        = "leaf"
+	PrefixBranch      = "br"
+	PrefixConnection  = "conn"
+	PrefixThread      = "thr"
+	PrefixCheckpoint  = "chk"
+	PrefixDeliverable = "del"
 )
 
 // Convenience generators for each entity type.
 
-func NewUserID() UserID                 { return NewID[userTag](PrefixUser) }
-func NewWorkspaceID() WorkspaceID       { return NewID[workspaceTag](PrefixWorkspace) }
-func NewSeedID() SeedID                 { return NewID[seedTag](PrefixSeed) }
-func NewLeafID() LeafID                 { return NewID[leafTag](PrefixLeaf) }
-func NewBranchID() BranchID             { return NewID[branchTag](PrefixBranch) }
-func NewConnectionID() ConnectionID     { return NewID[connectionTag](PrefixConnection) }
-func NewThreadID() ThreadID             { return NewID[threadTag](PrefixThread) }
-func NewCheckpointID() CheckpointID     { return NewID[checkpointTag](PrefixCheckpoint) }
-func NewDeliverableID() DeliverableID   { return NewID[deliverableTag](PrefixDeliverable) }
+func NewUserID() UserID               { return NewID[userTag](PrefixUser) }
+func NewWorkspaceID() WorkspaceID     { return NewID[workspaceTag](PrefixWorkspace) }
+func NewSeedID() SeedID               { return NewID[seedTag](PrefixSeed) }
+func NewLeafID() LeafID               { return NewID[leafTag](PrefixLeaf) }
+func NewBranchID() BranchID           { return NewID[branchTag](PrefixBranch) }
+func NewConnectionID() ConnectionID   { return NewID[connectionTag](PrefixConnection) }
+func NewThreadID() ThreadID           { return NewID[threadTag](PrefixThread) }
+func NewCheckpointID() CheckpointID   { return NewID[checkpointTag](PrefixCheckpoint) }
+func NewDeliverableID() DeliverableID { return NewID[deliverableTag](PrefixDeliverable) }

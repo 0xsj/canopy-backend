@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/0xsj/canopy-backend/pkg/config"
+	"github.com/0xsj/canopy-backend/pkg/database"
 	"github.com/0xsj/canopy-backend/pkg/errors"
 	"github.com/0xsj/canopy-backend/pkg/observability/logger"
 	"github.com/0xsj/canopy-backend/pkg/types"
@@ -34,23 +35,6 @@ func (c *ServerConfig) Validate() error {
 	return v.Err()
 }
 
-type DatabaseConfig struct {
-	DSN         string
-	MaxPoolSize int
-}
-
-func (c *DatabaseConfig) Load(env config.EnvReader) {
-	c.DSN = env.String("DSN", "postgres://localhost:5432/canopy?sslmode=disable")
-	c.MaxPoolSize = env.Int("MAX_POOL_SIZE", 10)
-}
-
-func (c *DatabaseConfig) Validate() error {
-	var v config.Errors
-	v.Required("dsn", c.DSN)
-	v.Positive("max_pool_size", c.MaxPoolSize)
-	return v.Err()
-}
-
 // --- Domain entity ---
 
 type Leaf struct {
@@ -65,7 +49,6 @@ type Leaf struct {
 // --- Domain layer (repository) ---
 
 func findLeafByID(id types.LeafID) (*Leaf, error) {
-	// Simulates a database lookup that finds nothing.
 	return nil, errors.New("leaf not found").
 		WithKind(errors.KindNotFound).
 		WithCode("exploration_leaf_not_found").
@@ -74,7 +57,6 @@ func findLeafByID(id types.LeafID) (*Leaf, error) {
 }
 
 func listLeaves(workspaceID types.WorkspaceID, page types.PageRequest) ([]Leaf, error) {
-	// Simulates a database query returning a page of leaves.
 	leaves := make([]Leaf, 0, page.EffectiveLimit()+1)
 	for i := range page.EffectiveLimit() + 1 {
 		leaves = append(leaves, Leaf{
@@ -83,7 +65,7 @@ func listLeaves(workspaceID types.WorkspaceID, page types.PageRequest) ([]Leaf, 
 			Summary:     "An immutable thought captured during exploration",
 			WorkspaceID: workspaceID,
 			AuthorID:    types.NewUserID(),
-			Timestamps:  types.NewTimestamps(), // immutable — no UpdatedAt
+			Timestamps:  types.NewTimestamps(),
 		})
 	}
 	return leaves, nil
@@ -116,7 +98,6 @@ func getLeaves(ctx context.Context, wsID types.WorkspaceID, page types.PageReque
 		logger.Int("limit", limit),
 	)
 
-	// Fetch limit+1 to detect if there are more.
 	leaves, err := listLeaves(wsID, page)
 	if err != nil {
 		return nil, errors.Wrap(err, "exploration: list leaves")
@@ -168,13 +149,11 @@ func handleGetLeaf(ctx context.Context) {
 func handleCreateLeaf(ctx context.Context) {
 	log := logger.FromContext(ctx)
 
-	// Simulate a request with invalid input.
 	title := ""
 	summary := ""
 
 	log.Info("POST /leaves", logger.String("title", title))
 
-	// Validate input.
 	var fieldErrors []types.FieldError
 	if title == "" {
 		fieldErrors = append(fieldErrors, types.FieldError{
@@ -228,9 +207,11 @@ func printJSON(label string, v any) {
 }
 
 func main() {
+	ctx := context.Background()
+
 	// --- 1. Config ---
 	var serverCfg ServerConfig
-	var dbCfg DatabaseConfig
+	var dbCfg database.Config
 
 	loader := config.NewLoader("CANOPY")
 	loader.Register("SERVER", &serverCfg)
@@ -254,22 +235,72 @@ func main() {
 		logger.String("env", serverCfg.Environment),
 	)
 
-	addr := fmt.Sprintf("%s:%d", serverCfg.Host, serverCfg.Port)
-	log.Info("server started", logger.String("addr", addr))
+	// --- 3. Database ---
+	db, err := database.Connect(ctx, dbCfg, log)
+	if err != nil {
+		log.Error("database connection failed", logger.Err(err))
+		os.Exit(1)
+	}
+	defer db.Close()
 
-	// --- 3. Request simulations ---
+	// Health check.
+	if err := db.Health(ctx); err != nil {
+		log.Error("database health check failed", logger.Err(err))
+		os.Exit(1)
+	}
+	log.Info("database health check passed")
+
+	// Pool stats.
+	stats := db.Stats()
+	log.Info("database pool stats",
+		logger.Int("total", int(stats.TotalConns)),
+		logger.Int("idle", int(stats.IdleConns)),
+		logger.Int("acquired", int(stats.AcquiredConn)),
+	)
+
+	// Quick query to verify schemas exist.
+	var schemaCount int
+	err = db.Pool().QueryRow(ctx,
+		`SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name IN (
+			'identity', 'workspace', 'seed', 'exploration', 'synthesis',
+			'session', 'convergence', 'discussion', 'deliverable', 'notification'
+		)`,
+	).Scan(&schemaCount)
+	if err != nil {
+		log.Error("schema check failed", logger.Err(err))
+	} else {
+		log.Info("bounded context schemas verified", logger.Int("count", schemaCount))
+	}
+
+	// Check AGE extension.
+	var ageInstalled bool
+	err = db.Pool().QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'age')`,
+	).Scan(&ageInstalled)
+	if err != nil {
+		log.Error("AGE check failed", logger.Err(err))
+	} else if ageInstalled {
+		log.Info("Apache AGE extension loaded")
+	} else {
+		log.Warn("Apache AGE extension not found")
+	}
+
+	addr := fmt.Sprintf("%s:%d", serverCfg.Host, serverCfg.Port)
+	log.Info("server ready", logger.String("addr", addr))
+
+	// --- 4. Request simulations ---
 	requestLog := log.With(logger.String("request_id", "req-8f3a"))
-	ctx := logger.WithContext(context.Background(), requestLog)
+	reqCtx := logger.WithContext(ctx, requestLog)
 
 	fmt.Println()
 	log.Info("--- simulate: GET /leaf/:id (not found) ---")
-	handleGetLeaf(ctx)
+	handleGetLeaf(reqCtx)
 
 	fmt.Println()
 	log.Info("--- simulate: POST /leaves (validation error) ---")
-	handleCreateLeaf(ctx)
+	handleCreateLeaf(reqCtx)
 
 	fmt.Println()
 	log.Info("--- simulate: GET /leaves (paginated) ---")
-	handleListLeaves(ctx)
+	handleListLeaves(reqCtx)
 }
