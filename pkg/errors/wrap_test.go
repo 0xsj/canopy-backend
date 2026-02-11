@@ -221,3 +221,74 @@ func TestCollectMetadata_NilReturnsEmpty(t *testing.T) {
 		t.Errorf("metadata should be empty for nil, got %v", meta)
 	}
 }
+
+// --- Origin / OriginFrame ---
+
+func TestOrigin_FindsDeepestCanopyError(t *testing.T) {
+	inner := New("db error").WithCode("inner_code")
+	middle := Wrap(inner, "repo layer")
+	outer := Wrap(middle, "service layer")
+
+	origin := Origin(outer)
+	if origin == nil {
+		t.Fatal("Origin returned nil")
+	}
+	if origin.ErrorCode() != "inner_code" {
+		t.Errorf("Origin code = %v, want inner_code", origin.ErrorCode())
+	}
+}
+
+func TestOrigin_SingleError(t *testing.T) {
+	err := New("single").WithCode("only")
+	origin := Origin(err)
+	if origin == nil {
+		t.Fatal("Origin returned nil")
+	}
+	if origin.ErrorCode() != "only" {
+		t.Errorf("Origin code = %v, want only", origin.ErrorCode())
+	}
+}
+
+func TestOrigin_StdErrorReturnsNil(t *testing.T) {
+	err := stderrors.New("plain")
+	if got := Origin(err); got != nil {
+		t.Errorf("Origin should be nil for std error, got %v", got)
+	}
+}
+
+func TestOrigin_NilReturnsNil(t *testing.T) {
+	if got := Origin(nil); got != nil {
+		t.Errorf("Origin(nil) should be nil, got %v", got)
+	}
+}
+
+func TestOriginFrame_ReturnsCreationSite(t *testing.T) {
+	inner := New("origin error")
+	wrapped := Wrap(inner, "service")
+
+	frame := OriginFrame(wrapped)
+	if frame.File == "" {
+		t.Fatal("OriginFrame returned empty file")
+	}
+	if frame.Line == 0 {
+		t.Fatal("OriginFrame returned line 0")
+	}
+	if frame.Function == "" {
+		t.Fatal("OriginFrame returned empty function")
+	}
+}
+
+func TestOriginFrame_StdErrorReturnsEmptyFrame(t *testing.T) {
+	err := stderrors.New("plain")
+	frame := OriginFrame(err)
+	if frame.File != "" || frame.Line != 0 {
+		t.Errorf("OriginFrame should return empty frame for std error, got %+v", frame)
+	}
+}
+
+func TestOriginFrame_NilReturnsEmptyFrame(t *testing.T) {
+	frame := OriginFrame(nil)
+	if frame.File != "" || frame.Line != 0 {
+		t.Errorf("OriginFrame(nil) should return empty frame, got %+v", frame)
+	}
+}

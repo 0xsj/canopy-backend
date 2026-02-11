@@ -1,15 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/0xsj/canopy-backend/pkg/errors"
+	"github.com/0xsj/canopy-backend/pkg/observability/logger"
 )
 
 // --- Domain layer (repository) ---
 
 func findLeafByID(id string) error {
-	// Simulates a database lookup that finds nothing.
 	return errors.New("leaf not found").
 		WithKind(errors.KindNotFound).
 		WithCode("exploration_leaf_not_found").
@@ -19,69 +20,75 @@ func findLeafByID(id string) error {
 
 // --- Service layer ---
 
-func getLeaf(id string, workspaceID string) error {
+func getLeaf(ctx context.Context, id string, workspaceID string) error {
+	log := logger.FromContext(ctx)
+	log.Debug("looking up leaf", logger.String("leaf_id", id))
+
 	err := findLeafByID(id)
 	if err != nil {
+		log.Warn("leaf lookup failed",
+			logger.String("leaf_id", id),
+			logger.Err(err),
+		)
 		return errors.Wrap(err, "exploration: get leaf").
 			WithMetadata("workspace_id", workspaceID)
 	}
+
+	log.Info("leaf retrieved", logger.String("leaf_id", id))
 	return nil
 }
 
 // --- Handler layer ---
 
-func handleGetLeaf() {
+func handleGetLeaf(ctx context.Context) {
+	log := logger.FromContext(ctx)
 	leafID := "leaf-abc-123"
 	workspaceID := "ws-xyz-789"
 
-	err := getLeaf(leafID, workspaceID)
+	log.Info("handling GET /leaf", logger.String("leaf_id", leafID))
+
+	err := getLeaf(ctx, leafID, workspaceID)
 	if err == nil {
-		fmt.Println("success (unexpected in this demo)")
+		log.Info("success")
 		return
 	}
 
-	fmt.Println("=== Error as seen by the handler ===")
-	fmt.Println()
-
-	// 1. The full error message (includes operation chain).
-	fmt.Printf("Error:    %s\n", err)
-	fmt.Println()
-
-	// 2. Extract classification for HTTP response.
-	kind := errors.GetKind(err)
-	code := errors.GetCode(err)
-	severity := errors.GetSeverity(err)
-
-	fmt.Printf("Kind:     %s\n", kind)
-	fmt.Printf("Code:     %s\n", code)
-	fmt.Printf("Severity: %s\n", severity)
-	fmt.Println()
-
-	// 3. Collect metadata from the full chain.
+	// Log the error with all collected metadata and origin.
 	meta := errors.CollectMetadata(err)
-	fmt.Println("Metadata (collected from all layers):")
+	origin := errors.OriginFrame(err)
+	fields := []logger.Field{
+		logger.String("kind", errors.GetKind(err).String()),
+		logger.String("code", errors.GetCode(err).String()),
+		logger.String("severity", errors.GetSeverity(err).String()),
+		logger.String("origin", origin.Short()),
+	}
 	for k, v := range meta {
-		fmt.Printf("  %s = %v\n", k, v)
+		fields = append(fields, logger.Any(k, v))
 	}
-	fmt.Println()
+	log.Error("request failed", fields...)
 
-	// 4. Stack trace from the origin.
-	var ce errors.Error
-	if errors.As(err, &ce) {
-		stack := ce.ErrorStack()
-		if stack != nil {
-			fmt.Println("Stack (origin):")
-			fmt.Println(stack)
-		}
-	}
-
+	// What the HTTP response would look like.
 	fmt.Println()
-	fmt.Println("=== HTTP response the handler would send ===")
-	fmt.Println()
+	fmt.Println("=== HTTP response ===")
 	fmt.Printf("Status: 404\n")
-	fmt.Printf("Body:   {\"error\": {\"code\": \"%s\", \"message\": \"leaf not found\"}}\n", code)
+	fmt.Printf("Body:   {\"error\": {\"code\": \"%s\", \"message\": \"leaf not found\"}}\n",
+		errors.GetCode(err))
 }
 
 func main() {
-	handleGetLeaf()
+	// Wire the logger — this is what the composition root would do.
+	log := logger.NewConsole(
+		logger.WithLevel(logger.LevelDebug),
+		logger.WithColor(true),
+		logger.WithTimestamps(true),
+	)
+
+	// Simulate middleware attaching a request-scoped logger to context.
+	requestLog := log.With(logger.String("request_id", "req-8f3a"))
+	ctx := logger.WithContext(context.Background(), requestLog)
+
+	log.Info("server started", logger.String("addr", ":8080"))
+	fmt.Println()
+
+	handleGetLeaf(ctx)
 }

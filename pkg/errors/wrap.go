@@ -73,6 +73,37 @@ func GetSeverity(err error) Severity {
 	return SeverityLow
 }
 
+// Origin walks to the deepest canopy error in the chain — the point
+// where the error was first created. Returns nil if no canopy error is found.
+func Origin(err error) Error {
+	var origin Error
+	current := err
+	for current != nil {
+		var ce Error
+		if stderrors.As(current, &ce) {
+			origin = ce
+			current = ce.Unwrap()
+		} else {
+			break
+		}
+	}
+	return origin
+}
+
+// OriginFrame returns the call site (file:line) where the error was first
+// created. Returns an empty Frame if no canopy error or stack is found.
+func OriginFrame(err error) Frame {
+	o := Origin(err)
+	if o == nil {
+		return Frame{}
+	}
+	stack := o.ErrorStack()
+	if len(stack) == 0 {
+		return Frame{}
+	}
+	return stack[0]
+}
+
 // CollectMetadata walks the error chain and merges all metadata.
 // Values from outer (more recent) errors take precedence.
 func CollectMetadata(err error) Metadata {

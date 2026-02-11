@@ -77,3 +77,25 @@ func TestStackTrace_String_Empty(t *testing.T) {
 		t.Errorf("empty StackTrace.String() = %q, want empty", got)
 	}
 }
+
+func TestFrame_Short(t *testing.T) {
+	f := Frame{
+		Function: "github.com/0xsj/canopy-backend/pkg/errors.New",
+		File:     "/Users/sj/Desktop/dev/builds/canopy/canopy-backend/pkg/errors/error.go",
+		Line:     42,
+	}
+
+	want := "error.go:42"
+	if got := f.Short(); got != want {
+		t.Errorf("Frame.Short() = %q, want %q", got, want)
+	}
+}
+
+func TestFrame_Short_NoSlash(t *testing.T) {
+	f := Frame{Function: "main.run", File: "main.go", Line: 10}
+
+	want := "main.go:10"
+	if got := f.Short(); got != want {
+		t.Errorf("Frame.Short() = %q, want %q", got, want)
+	}
+}

@@ -17,6 +17,15 @@ func (f Frame) String() string {
 	return fmt.Sprintf("%s\n\t%s:%d", f.Function, f.File, f.Line)
 }
 
+// Short returns a compact "file:line" representation for log fields.
+func (f Frame) Short() string {
+	file := f.File
+	if idx := strings.LastIndex(file, "/"); idx >= 0 {
+		file = file[idx+1:]
+	}
+	return fmt.Sprintf("%s:%d", file, f.Line)
+}
+
 // StackTrace is an ordered list of frames from the call site upward.
 type StackTrace []Frame
 
