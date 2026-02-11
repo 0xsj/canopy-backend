@@ -15,6 +15,7 @@ import (
 	"github.com/0xsj/canopy-backend/pkg/httpserver"
 	"github.com/0xsj/canopy-backend/pkg/observability/logger"
 	"github.com/0xsj/canopy-backend/pkg/types"
+	"github.com/0xsj/canopy-backend/pkg/websocket"
 )
 
 func main() {
@@ -25,11 +26,13 @@ func main() {
 	var httpCfg httpserver.Config
 	var dbCfg database.Config
 	var eventsCfg events.Config
+	var wsCfg websocket.Config
 
 	loader := config.NewLoader("CANOPY")
 	loader.Register("HTTP", &httpCfg)
 	loader.Register("DATABASE", &dbCfg)
 	loader.Register("EVENTS", &eventsCfg)
+	loader.Register("WS", &wsCfg)
 
 	if err := loader.LoadAll(); err != nil {
 		fmt.Fprintf(os.Stderr, "fatal: %s\n", err)
@@ -62,7 +65,11 @@ func main() {
 	pub := events.NewPublisher(broker)
 	sub := events.NewSubscriber(broker)
 
-	// Subscribe to all workspace events — demo event logger.
+	// ── 5. WebSocket hub ─────────────────────────────────────────
+	hub := websocket.NewHub(wsCfg, log)
+	upgrader := websocket.NewNhooyrUpgrader()
+
+	// Bridge: NATS events → WebSocket broadcast.
 	subscription, err := sub.Subscribe(ctx, "workspace.>", func(_ context.Context, event events.Event) error {
 		log.Info("event received",
 			logger.String("id", event.ID),
@@ -70,29 +77,35 @@ func main() {
 			logger.String("subject", event.Subject),
 			logger.String("workspace", event.WorkspaceID),
 		)
+
+		// Forward to WebSocket clients in the same workspace.
+		msg, err := websocket.NewMessage(event.Type, event.WorkspaceID, event.Data)
+		if err != nil {
+			return nil // log but don't fail the event
+		}
+		hub.BroadcastMessage(event.WorkspaceID, msg)
 		return nil
-	}, events.WithConsumer("demo_logger"))
+	}, events.WithConsumer("demo_ws_bridge"))
 	if err != nil {
 		log.Error("event subscription failed", logger.Err(err))
 		os.Exit(1)
 	}
 	defer subscription.Unsubscribe()
 
-	// ── 5. Health monitor ────────────────────────────────────────
+	// ── 6. Health monitor ────────────────────────────────────────
 	monitor := health.NewMonitor()
 	monitor.Register("database", health.CheckFunc(db.Health))
 	monitor.Register("nats", health.CheckFunc(func(ctx context.Context) error {
 		return broker.Health()
 	}))
 
-	// ── 6. Routes ────────────────────────────────────────────────
+	// ── 7. Routes ────────────────────────────────────────────────
 	mux := http.NewServeMux()
 
-	// Health endpoints.
+	// Health.
 	mux.HandleFunc("GET /healthz/live", func(w http.ResponseWriter, r *http.Request) {
 		httpserver.JSON(w, http.StatusOK, map[string]string{"status": "alive"})
 	})
-
 	mux.HandleFunc("GET /healthz/ready", func(w http.ResponseWriter, r *http.Request) {
 		report := monitor.Readiness(r.Context())
 		status := http.StatusOK
@@ -102,7 +115,7 @@ func main() {
 		httpserver.JSON(w, status, report)
 	})
 
-	// Simulated leaves endpoint.
+	// Leaves (simulated).
 	mux.HandleFunc("GET /api/leaves", func(w http.ResponseWriter, r *http.Request) {
 		wsID := types.NewWorkspaceID()
 		leaves := make([]map[string]any, 3)
@@ -114,19 +127,18 @@ func main() {
 				"created_at":   types.Now().String(),
 			}
 		}
-
-		page := types.PageResponse[map[string]any]{
-			Items:   leaves,
-			HasMore: false,
-		}
+		page := types.PageResponse[map[string]any]{Items: leaves, HasMore: false}
 		types.WriteOK(w, page)
 	})
 
-	// Publish a test event.
+	// Publish a test event (now targets a specific workspace).
 	mux.HandleFunc("POST /api/events/test", func(w http.ResponseWriter, r *http.Request) {
-		wsID := types.NewWorkspaceID()
+		wsID := r.URL.Query().Get("workspace_id")
+		if wsID == "" {
+			wsID = types.NewWorkspaceID().String()
+		}
 
-		event, err := events.New("leaf_created", wsID.String(), map[string]string{
+		event, err := events.New("leaf_created", wsID, map[string]string{
 			"title":  "Test leaf from demo",
 			"author": "demo",
 		})
@@ -134,7 +146,7 @@ func main() {
 			types.WriteError(w, http.StatusInternalServerError, "event_build_failed", err.Error())
 			return
 		}
-		event.Subject = events.BuildSubject(wsID.String(), "exploration", "leaf_created")
+		event.Subject = events.BuildSubject(wsID, "exploration", "leaf_created")
 
 		if err := pub.Publish(r.Context(), event); err != nil {
 			types.WriteError(w, http.StatusInternalServerError, "event_publish_failed", err.Error())
@@ -142,30 +154,65 @@ func main() {
 		}
 
 		types.WriteOK(w, map[string]string{
-			"event_id": event.ID,
-			"subject":  event.Subject,
-			"status":   "published",
+			"event_id":     event.ID,
+			"subject":      event.Subject,
+			"workspace_id": wsID,
+			"status":       "published",
 		})
 	})
 
-	// Database info endpoint.
+	// Database info.
 	mux.HandleFunc("GET /api/debug/db", func(w http.ResponseWriter, r *http.Request) {
 		stats := db.Stats()
 		httpserver.JSON(w, http.StatusOK, map[string]any{
-			"total_conns":   stats.TotalConns,
-			"idle_conns":    stats.IdleConns,
+			"total_conns":    stats.TotalConns,
+			"idle_conns":     stats.IdleConns,
 			"acquired_conns": stats.AcquiredConn,
 		})
 	})
 
-	// ── 7. Middleware ────────────────────────────────────────────
+	// WebSocket endpoint.
+	mux.HandleFunc("GET /ws", func(w http.ResponseWriter, r *http.Request) {
+		wsID := r.URL.Query().Get("workspace_id")
+		if wsID == "" {
+			http.Error(w, "workspace_id query parameter is required", http.StatusBadRequest)
+			return
+		}
+
+		conn, err := upgrader.Upgrade(w, r)
+		if err != nil {
+			log.Error("websocket upgrade failed", logger.Err(err))
+			return
+		}
+
+		log.Info("websocket client connected",
+			logger.String("workspace", wsID),
+			logger.Int("room_size", hub.RoomSize(wsID)+1),
+		)
+
+		hub.ServeConn(r.Context(), conn, wsID, func(msg websocket.Message) {
+			log.Debug("ws message from client",
+				logger.String("type", msg.Type),
+				logger.String("workspace", wsID),
+			)
+		})
+	})
+
+	// WebSocket stats.
+	mux.HandleFunc("GET /api/debug/ws", func(w http.ResponseWriter, r *http.Request) {
+		httpserver.JSON(w, http.StatusOK, map[string]any{
+			"total_connections": hub.TotalConnections(),
+		})
+	})
+
+	// ── 8. Middleware ────────────────────────────────────────────
 	handler := httpserver.Chain(
 		httpserver.Recovery(log),
 		httpserver.RequestID(),
 		httpserver.Logging(log),
 	)(mux)
 
-	// ── 8. Start server ──────────────────────────────────────────
+	// ── 9. Start server ──────────────────────────────────────────
 	srv := httpserver.New(httpCfg, handler, log)
 
 	go func() {
@@ -175,20 +222,20 @@ func main() {
 		}
 	}()
 
-	log.Info("demo ready — try these endpoints:",
-		logger.String("liveness", "GET http://localhost:8080/healthz/live"),
-		logger.String("readiness", "GET http://localhost:8080/healthz/ready"),
-		logger.String("leaves", "GET http://localhost:8080/api/leaves"),
-		logger.String("publish", "POST http://localhost:8080/api/events/test"),
-		logger.String("db_stats", "GET http://localhost:8080/api/debug/db"),
+	log.Info("demo ready — endpoints:",
+		logger.String("liveness", "GET  /healthz/live"),
+		logger.String("readiness", "GET  /healthz/ready"),
+		logger.String("leaves", "GET  /api/leaves"),
+		logger.String("publish", "POST /api/events/test?workspace_id=ws_xxx"),
+		logger.String("websocket", "WS   /ws?workspace_id=ws_xxx"),
+		logger.String("ws_stats", "GET  /api/debug/ws"),
 	)
 
-	// ── 9. Graceful shutdown ─────────────────────────────────────
+	// ── 10. Graceful shutdown ────────────────────────────────────
 	<-ctx.Done()
 	log.Info("shutting down...")
 
-	shutdownCtx := context.Background()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
+	if err := srv.Shutdown(context.Background()); err != nil {
 		log.Error("server shutdown error", logger.Err(err))
 	}
 
