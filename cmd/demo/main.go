@@ -2,240 +2,48 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/0xsj/canopy-backend/pkg/config"
 	"github.com/0xsj/canopy-backend/pkg/database"
-	"github.com/0xsj/canopy-backend/pkg/errors"
+	"github.com/0xsj/canopy-backend/pkg/events"
+	"github.com/0xsj/canopy-backend/pkg/health"
+	"github.com/0xsj/canopy-backend/pkg/httpserver"
 	"github.com/0xsj/canopy-backend/pkg/observability/logger"
 	"github.com/0xsj/canopy-backend/pkg/types"
 )
 
-// --- Example config sections ---
-
-type ServerConfig struct {
-	Host        string
-	Port        int
-	Environment string
-}
-
-func (c *ServerConfig) Load(env config.EnvReader) {
-	c.Host = env.String("HOST", "0.0.0.0")
-	c.Port = env.Int("PORT", 8080)
-	c.Environment = env.String("ENV", "development")
-}
-
-func (c *ServerConfig) Validate() error {
-	var v config.Errors
-	v.Required("host", c.Host)
-	v.PortRange("port", c.Port)
-	v.OneOf("env", c.Environment, []string{"development", "staging", "production"})
-	return v.Err()
-}
-
-// --- Domain entity ---
-
-type Leaf struct {
-	ID          types.LeafID      `json:"id"`
-	Title       string            `json:"title"`
-	Summary     string            `json:"summary"`
-	WorkspaceID types.WorkspaceID `json:"workspace_id"`
-	AuthorID    types.UserID      `json:"author_id"`
-	Timestamps  types.Timestamps  `json:"timestamps"`
-}
-
-// --- Domain layer (repository) ---
-
-func findLeafByID(id types.LeafID) (*Leaf, error) {
-	return nil, errors.New("leaf not found").
-		WithKind(errors.KindNotFound).
-		WithCode("exploration_leaf_not_found").
-		WithSeverity(errors.SeverityLow).
-		WithMetadata("leaf_id", id.String())
-}
-
-func listLeaves(workspaceID types.WorkspaceID, page types.PageRequest) ([]Leaf, error) {
-	leaves := make([]Leaf, 0, page.EffectiveLimit()+1)
-	for i := range page.EffectiveLimit() + 1 {
-		leaves = append(leaves, Leaf{
-			ID:          types.NewLeafID(),
-			Title:       fmt.Sprintf("Leaf #%d", i+1),
-			Summary:     "An immutable thought captured during exploration",
-			WorkspaceID: workspaceID,
-			AuthorID:    types.NewUserID(),
-			Timestamps:  types.NewTimestamps(),
-		})
-	}
-	return leaves, nil
-}
-
-// --- Service layer ---
-
-func getLeaf(ctx context.Context, id types.LeafID, wsID types.WorkspaceID) (*Leaf, error) {
-	log := logger.FromContext(ctx)
-	log.Debug("looking up leaf", logger.String("leaf_id", id.String()))
-
-	leaf, err := findLeafByID(id)
-	if err != nil {
-		log.Warn("leaf lookup failed",
-			logger.String("leaf_id", id.String()),
-			logger.Err(err),
-		)
-		return nil, errors.Wrap(err, "exploration: get leaf").
-			WithMetadata("workspace_id", wsID.String())
-	}
-
-	return leaf, nil
-}
-
-func getLeaves(ctx context.Context, wsID types.WorkspaceID, page types.PageRequest) (*types.PageResponse[Leaf], error) {
-	log := logger.FromContext(ctx)
-	limit := page.EffectiveLimit()
-	log.Debug("listing leaves",
-		logger.String("workspace_id", wsID.String()),
-		logger.Int("limit", limit),
-	)
-
-	leaves, err := listLeaves(wsID, page)
-	if err != nil {
-		return nil, errors.Wrap(err, "exploration: list leaves")
-	}
-
-	result := types.NewPageResponse(leaves, limit, func(l Leaf) string {
-		return types.EncodeCursor(l.ID.String())
-	})
-
-	log.Info("leaves listed",
-		logger.Int("count", len(result.Items)),
-		logger.Bool("has_more", result.HasMore),
-	)
-	return &result, nil
-}
-
-// --- Handler layer ---
-
-func handleGetLeaf(ctx context.Context) {
-	log := logger.FromContext(ctx)
-	leafID := types.NewLeafID()
-	wsID := types.NewWorkspaceID()
-
-	log.Info("GET /leaf/:id", logger.String("leaf_id", leafID.String()))
-
-	_, err := getLeaf(ctx, leafID, wsID)
-	if err != nil {
-		meta := errors.CollectMetadata(err)
-		origin := errors.OriginFrame(err)
-		fields := []logger.Field{
-			logger.String("kind", errors.GetKind(err).String()),
-			logger.String("code", errors.GetCode(err).String()),
-			logger.String("origin", origin.Short()),
-		}
-		for k, v := range meta {
-			fields = append(fields, logger.Any(k, v))
-		}
-		log.Error("request failed", fields...)
-
-		resp := types.Fail[Leaf](
-			errors.GetCode(err).String(),
-			"leaf not found",
-		)
-		printJSON("Error response", resp)
-		return
-	}
-}
-
-func handleCreateLeaf(ctx context.Context) {
-	log := logger.FromContext(ctx)
-
-	title := ""
-	summary := ""
-
-	log.Info("POST /leaves", logger.String("title", title))
-
-	var fieldErrors []types.FieldError
-	if title == "" {
-		fieldErrors = append(fieldErrors, types.FieldError{
-			Field:   "title",
-			Message: "is required",
-		})
-	}
-	if summary == "" {
-		fieldErrors = append(fieldErrors, types.FieldError{
-			Field:   "summary",
-			Message: "is required",
-		})
-	}
-
-	if len(fieldErrors) > 0 {
-		log.Warn("validation failed", logger.Int("field_errors", len(fieldErrors)))
-
-		resp := types.FailWithDetails[Leaf](
-			"validation_failed",
-			"one or more fields are invalid",
-			fieldErrors,
-		)
-		printJSON("Validation error response", resp)
-		return
-	}
-}
-
-func handleListLeaves(ctx context.Context) {
-	log := logger.FromContext(ctx)
-	wsID := types.NewWorkspaceID()
-	page := types.PageRequest{Limit: 3}
-
-	log.Info("GET /leaves", logger.String("workspace_id", wsID.String()))
-
-	result, err := getLeaves(ctx, wsID, page)
-	if err != nil {
-		log.Error("request failed", logger.Err(err))
-		return
-	}
-
-	resp := types.OK(*result)
-	printJSON("Paginated response", resp)
-}
-
-func printJSON(label string, v any) {
-	fmt.Println()
-	fmt.Printf("=== %s ===\n", label)
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	enc.Encode(v)
-}
-
 func main() {
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	// --- 1. Config ---
-	var serverCfg ServerConfig
+	// ── 1. Config ────────────────────────────────────────────────
+	var httpCfg httpserver.Config
 	var dbCfg database.Config
+	var eventsCfg events.Config
 
 	loader := config.NewLoader("CANOPY")
-	loader.Register("SERVER", &serverCfg)
+	loader.Register("HTTP", &httpCfg)
 	loader.Register("DATABASE", &dbCfg)
+	loader.Register("EVENTS", &eventsCfg)
 
 	if err := loader.LoadAll(); err != nil {
 		fmt.Fprintf(os.Stderr, "fatal: %s\n", err)
 		os.Exit(1)
 	}
 
-	// --- 2. Logger ---
+	// ── 2. Logger ────────────────────────────────────────────────
 	log := logger.NewConsole(
 		logger.WithLevel(logger.LevelDebug),
 		logger.WithColor(true),
 		logger.WithTimestamps(true),
 	)
 
-	log.Info("config loaded",
-		logger.String("host", serverCfg.Host),
-		logger.Int("port", serverCfg.Port),
-		logger.String("env", serverCfg.Environment),
-	)
-
-	// --- 3. Database ---
+	// ── 3. Database ──────────────────────────────────────────────
 	db, err := database.Connect(ctx, dbCfg, log)
 	if err != nil {
 		log.Error("database connection failed", logger.Err(err))
@@ -243,64 +51,146 @@ func main() {
 	}
 	defer db.Close()
 
-	// Health check.
-	if err := db.Health(ctx); err != nil {
-		log.Error("database health check failed", logger.Err(err))
+	// ── 4. Events (NATS + JetStream) ─────────────────────────────
+	broker, err := events.Connect(ctx, eventsCfg, log)
+	if err != nil {
+		log.Error("nats connection failed", logger.Err(err))
 		os.Exit(1)
 	}
-	log.Info("database health check passed")
+	defer broker.Close()
 
-	// Pool stats.
-	stats := db.Stats()
-	log.Info("database pool stats",
-		logger.Int("total", int(stats.TotalConns)),
-		logger.Int("idle", int(stats.IdleConns)),
-		logger.Int("acquired", int(stats.AcquiredConn)),
+	pub := events.NewPublisher(broker)
+	sub := events.NewSubscriber(broker)
+
+	// Subscribe to all workspace events — demo event logger.
+	subscription, err := sub.Subscribe(ctx, "workspace.>", func(_ context.Context, event events.Event) error {
+		log.Info("event received",
+			logger.String("id", event.ID),
+			logger.String("type", event.Type),
+			logger.String("subject", event.Subject),
+			logger.String("workspace", event.WorkspaceID),
+		)
+		return nil
+	}, events.WithConsumer("demo_logger"))
+	if err != nil {
+		log.Error("event subscription failed", logger.Err(err))
+		os.Exit(1)
+	}
+	defer subscription.Unsubscribe()
+
+	// ── 5. Health monitor ────────────────────────────────────────
+	monitor := health.NewMonitor()
+	monitor.Register("database", health.CheckFunc(db.Health))
+	monitor.Register("nats", health.CheckFunc(func(ctx context.Context) error {
+		return broker.Health()
+	}))
+
+	// ── 6. Routes ────────────────────────────────────────────────
+	mux := http.NewServeMux()
+
+	// Health endpoints.
+	mux.HandleFunc("GET /healthz/live", func(w http.ResponseWriter, r *http.Request) {
+		httpserver.JSON(w, http.StatusOK, map[string]string{"status": "alive"})
+	})
+
+	mux.HandleFunc("GET /healthz/ready", func(w http.ResponseWriter, r *http.Request) {
+		report := monitor.Readiness(r.Context())
+		status := http.StatusOK
+		if !report.IsHealthy() {
+			status = http.StatusServiceUnavailable
+		}
+		httpserver.JSON(w, status, report)
+	})
+
+	// Simulated leaves endpoint.
+	mux.HandleFunc("GET /api/leaves", func(w http.ResponseWriter, r *http.Request) {
+		wsID := types.NewWorkspaceID()
+		leaves := make([]map[string]any, 3)
+		for i := range 3 {
+			leaves[i] = map[string]any{
+				"id":           types.NewLeafID().String(),
+				"title":        fmt.Sprintf("Leaf #%d", i+1),
+				"workspace_id": wsID.String(),
+				"created_at":   types.Now().String(),
+			}
+		}
+
+		page := types.PageResponse[map[string]any]{
+			Items:   leaves,
+			HasMore: false,
+		}
+		types.WriteOK(w, page)
+	})
+
+	// Publish a test event.
+	mux.HandleFunc("POST /api/events/test", func(w http.ResponseWriter, r *http.Request) {
+		wsID := types.NewWorkspaceID()
+
+		event, err := events.New("leaf_created", wsID.String(), map[string]string{
+			"title":  "Test leaf from demo",
+			"author": "demo",
+		})
+		if err != nil {
+			types.WriteError(w, http.StatusInternalServerError, "event_build_failed", err.Error())
+			return
+		}
+		event.Subject = events.BuildSubject(wsID.String(), "exploration", "leaf_created")
+
+		if err := pub.Publish(r.Context(), event); err != nil {
+			types.WriteError(w, http.StatusInternalServerError, "event_publish_failed", err.Error())
+			return
+		}
+
+		types.WriteOK(w, map[string]string{
+			"event_id": event.ID,
+			"subject":  event.Subject,
+			"status":   "published",
+		})
+	})
+
+	// Database info endpoint.
+	mux.HandleFunc("GET /api/debug/db", func(w http.ResponseWriter, r *http.Request) {
+		stats := db.Stats()
+		httpserver.JSON(w, http.StatusOK, map[string]any{
+			"total_conns":   stats.TotalConns,
+			"idle_conns":    stats.IdleConns,
+			"acquired_conns": stats.AcquiredConn,
+		})
+	})
+
+	// ── 7. Middleware ────────────────────────────────────────────
+	handler := httpserver.Chain(
+		httpserver.Recovery(log),
+		httpserver.RequestID(),
+		httpserver.Logging(log),
+	)(mux)
+
+	// ── 8. Start server ──────────────────────────────────────────
+	srv := httpserver.New(httpCfg, handler, log)
+
+	go func() {
+		if err := srv.Start(); err != nil && err != http.ErrServerClosed {
+			log.Error("server error", logger.Err(err))
+			stop()
+		}
+	}()
+
+	log.Info("demo ready — try these endpoints:",
+		logger.String("liveness", "GET http://localhost:8080/healthz/live"),
+		logger.String("readiness", "GET http://localhost:8080/healthz/ready"),
+		logger.String("leaves", "GET http://localhost:8080/api/leaves"),
+		logger.String("publish", "POST http://localhost:8080/api/events/test"),
+		logger.String("db_stats", "GET http://localhost:8080/api/debug/db"),
 	)
 
-	// Quick query to verify schemas exist.
-	var schemaCount int
-	err = db.Pool().QueryRow(ctx,
-		`SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name IN (
-			'identity', 'workspace', 'seed', 'exploration', 'synthesis',
-			'session', 'convergence', 'discussion', 'deliverable', 'notification'
-		)`,
-	).Scan(&schemaCount)
-	if err != nil {
-		log.Error("schema check failed", logger.Err(err))
-	} else {
-		log.Info("bounded context schemas verified", logger.Int("count", schemaCount))
+	// ── 9. Graceful shutdown ─────────────────────────────────────
+	<-ctx.Done()
+	log.Info("shutting down...")
+
+	shutdownCtx := context.Background()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Error("server shutdown error", logger.Err(err))
 	}
 
-	// Check AGE extension.
-	var ageInstalled bool
-	err = db.Pool().QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'age')`,
-	).Scan(&ageInstalled)
-	if err != nil {
-		log.Error("AGE check failed", logger.Err(err))
-	} else if ageInstalled {
-		log.Info("Apache AGE extension loaded")
-	} else {
-		log.Warn("Apache AGE extension not found")
-	}
-
-	addr := fmt.Sprintf("%s:%d", serverCfg.Host, serverCfg.Port)
-	log.Info("server ready", logger.String("addr", addr))
-
-	// --- 4. Request simulations ---
-	requestLog := log.With(logger.String("request_id", "req-8f3a"))
-	reqCtx := logger.WithContext(ctx, requestLog)
-
-	fmt.Println()
-	log.Info("--- simulate: GET /leaf/:id (not found) ---")
-	handleGetLeaf(reqCtx)
-
-	fmt.Println()
-	log.Info("--- simulate: POST /leaves (validation error) ---")
-	handleCreateLeaf(reqCtx)
-
-	fmt.Println()
-	log.Info("--- simulate: GET /leaves (paginated) ---")
-	handleListLeaves(reqCtx)
+	log.Info("goodbye")
 }
