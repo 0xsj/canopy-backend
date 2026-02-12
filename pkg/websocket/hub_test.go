@@ -11,11 +11,11 @@ import (
 
 // mockConn implements Conn for testing.
 type mockConn struct {
-	mu       sync.Mutex
-	inbox    chan []byte // messages to be read
-	outbox   [][]byte   // messages written
-	closed   bool
-	closeCh  chan struct{}
+	mu      sync.Mutex
+	inbox   chan []byte // messages to be read
+	outbox  [][]byte    // messages written
+	closed  bool
+	closeCh chan struct{}
 }
 
 func newMockConn() *mockConn {

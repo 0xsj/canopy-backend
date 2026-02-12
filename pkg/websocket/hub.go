@@ -147,9 +147,9 @@ func (h *Hub) ServeConn(ctx context.Context, conn Conn, workspaceID string, onMe
 		}
 	}
 
-	cancel()         // signal write pump to stop
-	<-writeDone      // wait for write pump
-	h.unregister(c)  // remove from room, close send channel
+	cancel()        // signal write pump to stop
+	<-writeDone     // wait for write pump
+	h.unregister(c) // remove from room, close send channel
 	conn.Close(1000, "")
 }
 
