@@ -71,6 +71,8 @@ func (id *ID[T]) UnmarshalJSON(data []byte) error {
 
 type (
 	userTag        struct{}
+	orgTag         struct{}
+	teamTag        struct{}
 	workspaceTag   struct{}
 	seedTag        struct{}
 	leafTag        struct{}
@@ -83,6 +85,8 @@ type (
 
 type (
 	UserID        = ID[userTag]
+	OrgID         = ID[orgTag]
+	TeamID        = ID[teamTag]
 	WorkspaceID   = ID[workspaceTag]
 	SeedID        = ID[seedTag]
 	LeafID        = ID[leafTag]
@@ -96,6 +100,8 @@ type (
 // ID prefixes — used by generators and parsers.
 const (
 	PrefixUser        = "usr"
+	PrefixOrg         = "org"
+	PrefixTeam        = "team"
 	PrefixWorkspace   = "ws"
 	PrefixSeed        = "seed"
 	PrefixLeaf        = "leaf"
@@ -109,6 +115,8 @@ const (
 // Convenience generators for each entity type.
 
 func NewUserID() UserID               { return NewID[userTag](PrefixUser) }
+func NewOrgID() OrgID                 { return NewID[orgTag](PrefixOrg) }
+func NewTeamID() TeamID               { return NewID[teamTag](PrefixTeam) }
 func NewWorkspaceID() WorkspaceID     { return NewID[workspaceTag](PrefixWorkspace) }
 func NewSeedID() SeedID               { return NewID[seedTag](PrefixSeed) }
 func NewLeafID() LeafID               { return NewID[leafTag](PrefixLeaf) }
