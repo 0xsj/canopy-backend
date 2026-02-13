@@ -2,6 +2,7 @@ package database
 
 import (
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -63,4 +64,31 @@ func IDsFromStrings[T any](strs []string) []types.ID[T] {
 		ids[i] = types.IDFrom[T](s)
 	}
 	return ids
+}
+
+// NullableString returns a pointer to s, or nil if s is empty.
+// Used to map empty Go strings to SQL NULL for nullable text columns.
+func NullableString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// DerefString returns the string pointed to by s, or "" if s is nil.
+// Used to map SQL NULL back to an empty Go string.
+func DerefString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// TsUpdatedAt extracts the updated_at time from Timestamps.
+// Falls back to created_at if updated_at is nil.
+func TsUpdatedAt(ts types.Timestamps) time.Time {
+	if ts.UpdatedAt != nil {
+		return ts.UpdatedAt.Time()
+	}
+	return ts.CreatedAt.Time()
 }

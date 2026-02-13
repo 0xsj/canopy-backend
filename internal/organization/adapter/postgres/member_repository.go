@@ -2,49 +2,37 @@ package postgres
 
 import (
 	"context"
-	"time"
 
+	"github.com/0xsj/canopy-backend/internal/organization/adapter/postgres/sqlc"
 	"github.com/0xsj/canopy-backend/internal/organization/domain"
 	"github.com/0xsj/canopy-backend/pkg/database"
 	canopyerr "github.com/0xsj/canopy-backend/pkg/errors"
 	"github.com/0xsj/canopy-backend/pkg/types"
 )
 
-// MemberRepository implements domain.MemberRepository using Postgres.
+// MemberRepository implements domain.MemberRepository using Postgres via sqlc.
 type MemberRepository struct {
-	db database.DBTX
+	q *sqlc.Queries
 }
 
 // NewMemberRepository creates a new MemberRepository.
 func NewMemberRepository(db database.DBTX) *MemberRepository {
-	return &MemberRepository{db: db}
+	return &MemberRepository{q: sqlc.New(db)}
 }
 
 var _ domain.MemberRepository = (*MemberRepository)(nil)
 
 func (r *MemberRepository) Add(ctx context.Context, member domain.OrgMember) error {
 	const op = "organization: add member"
-	const query = `
-		INSERT INTO org_members (org_id, user_id, role, joined_at)
-		VALUES ($1, $2, $3, $4)`
-
-	_, err := r.db.Exec(ctx, query,
-		member.OrgID().String(),
-		member.UserID().String(),
-		string(member.Role()),
-		member.JoinedAt().Time(),
-	)
-	if err != nil {
-		return database.MapQueryError(err, op)
-	}
-	return nil
+	return database.MapQueryError(r.q.AddOrgMember(ctx, orgMemberToAddParams(member)), op)
 }
 
 func (r *MemberRepository) Remove(ctx context.Context, orgID types.OrgID, userID types.UserID) error {
 	const op = "organization: remove member"
-	const query = `DELETE FROM org_members WHERE org_id = $1 AND user_id = $2`
-
-	tag, err := r.db.Exec(ctx, query, orgID.String(), userID.String())
+	tag, err := r.q.RemoveOrgMember(ctx, sqlc.RemoveOrgMemberParams{
+		OrgID:  orgID.String(),
+		UserID: userID.String(),
+	})
 	if err != nil {
 		return database.MapQueryError(err, op)
 	}
@@ -56,42 +44,41 @@ func (r *MemberRepository) Remove(ctx context.Context, orgID types.OrgID, userID
 
 func (r *MemberRepository) FindByOrg(ctx context.Context, orgID types.OrgID) ([]domain.OrgMember, error) {
 	const op = "organization: find members by org"
-	const query = `
-		SELECT org_id, user_id, role, joined_at
-		FROM org_members WHERE org_id = $1 ORDER BY joined_at`
-
-	return r.queryMembers(ctx, query, op, orgID.String())
+	rows, err := r.q.FindOrgMembersByOrg(ctx, orgID.String())
+	if err != nil {
+		return nil, database.MapQueryError(err, op)
+	}
+	return orgMembersToDomain(rows), nil
 }
 
 func (r *MemberRepository) FindByUser(ctx context.Context, userID types.UserID) ([]domain.OrgMember, error) {
 	const op = "organization: find memberships by user"
-	const query = `
-		SELECT org_id, user_id, role, joined_at
-		FROM org_members WHERE user_id = $1 ORDER BY joined_at`
-
-	return r.queryMembers(ctx, query, op, userID.String())
+	rows, err := r.q.FindOrgMembersByUser(ctx, userID.String())
+	if err != nil {
+		return nil, database.MapQueryError(err, op)
+	}
+	return orgMembersToDomain(rows), nil
 }
 
 func (r *MemberRepository) FindMember(ctx context.Context, orgID types.OrgID, userID types.UserID) (domain.OrgMember, error) {
 	const op = "organization: find member"
-	const query = `
-		SELECT org_id, user_id, role, joined_at
-		FROM org_members WHERE org_id = $1 AND user_id = $2`
-
-	return scanOrgMember(r.db.QueryRow(ctx, query, orgID.String(), userID.String()), op)
+	row, err := r.q.FindOrgMember(ctx, sqlc.FindOrgMemberParams{
+		OrgID:  orgID.String(),
+		UserID: userID.String(),
+	})
+	if err != nil {
+		return domain.OrgMember{}, database.MapQueryError(err, op)
+	}
+	return orgMemberToDomain(row), nil
 }
 
 func (r *MemberRepository) UpdateRole(ctx context.Context, member domain.OrgMember) error {
 	const op = "organization: update member role"
-	const query = `
-		UPDATE org_members SET role = $3
-		WHERE org_id = $1 AND user_id = $2`
-
-	tag, err := r.db.Exec(ctx, query,
-		member.OrgID().String(),
-		member.UserID().String(),
-		string(member.Role()),
-	)
+	tag, err := r.q.UpdateOrgMemberRole(ctx, sqlc.UpdateOrgMemberRoleParams{
+		OrgID:  member.OrgID().String(),
+		UserID: member.UserID().String(),
+		Role:   string(member.Role()),
+	})
 	if err != nil {
 		return database.MapQueryError(err, op)
 	}
@@ -103,51 +90,12 @@ func (r *MemberRepository) UpdateRole(ctx context.Context, member domain.OrgMemb
 
 func (r *MemberRepository) CountByRole(ctx context.Context, orgID types.OrgID, role domain.Role) (int, error) {
 	const op = "organization: count members by role"
-	const query = `SELECT COUNT(*) FROM org_members WHERE org_id = $1 AND role = $2`
-
-	var count int
-	if err := r.db.QueryRow(ctx, query, orgID.String(), string(role)).Scan(&count); err != nil {
+	count, err := r.q.CountOrgMembersByRole(ctx, sqlc.CountOrgMembersByRoleParams{
+		OrgID: orgID.String(),
+		Role:  string(role),
+	})
+	if err != nil {
 		return 0, database.MapQueryError(err, op)
 	}
-	return count, nil
-}
-
-// --- helpers ---
-
-func (r *MemberRepository) queryMembers(ctx context.Context, query, op string, args ...any) ([]domain.OrgMember, error) {
-	rows, err := r.db.Query(ctx, query, args...)
-	if err != nil {
-		return nil, database.MapQueryError(err, op)
-	}
-	defer rows.Close()
-
-	var members []domain.OrgMember
-	for rows.Next() {
-		m, err := scanOrgMember(rows, op)
-		if err != nil {
-			return nil, err
-		}
-		members = append(members, m)
-	}
-	return members, rows.Err()
-}
-
-func scanOrgMember(row rowScanner, op string) (domain.OrgMember, error) {
-	var (
-		rawOrgID  string
-		rawUserID string
-		role      string
-		joinedAt  time.Time
-	)
-
-	if err := row.Scan(&rawOrgID, &rawUserID, &role, &joinedAt); err != nil {
-		return domain.OrgMember{}, database.MapQueryError(err, op)
-	}
-
-	return domain.ReconstructOrgMember(
-		types.OrgIDFrom(rawOrgID),
-		types.UserIDFrom(rawUserID),
-		domain.Role(role),
-		types.TimestampFrom(joinedAt),
-	), nil
+	return int(count), nil
 }

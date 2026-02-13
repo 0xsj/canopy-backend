@@ -1,0 +1,38 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    queries: "queries.sql"
+    schema: "migrations/"
+    gen:
+      go:
+        package: "sqlc"
+        out: "sqlc"
+        sql_package: "pgx/v5"
+        emit_interface: true
+        emit_empty_slices: true
+        emit_json_tags: false
+        overrides:
+          - db_type: "timestamptz"
+            go_type: "time.Time"
+          - db_type: "timestamptz"
+            nullable: true
+            go_type:
+              type: "Time"
+              import: "time"
+              pointer: true
+          - db_type: "text"
+            nullable: true
+            go_type:
+              type: "string"
+              pointer: true
+          - db_type: "jsonb"
+            go_type:
+              import: "encoding/json"
+              type: "RawMessage"
+          - db_type: "jsonb"
+            nullable: true
+            go_type:
+              import: "encoding/json"
+              type: "RawMessage"
+          - db_type: "integer"
+            go_type: "int"
