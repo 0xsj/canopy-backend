@@ -140,3 +140,27 @@ func ConnectionIDFrom(raw string) ConnectionID   { return IDFrom[connectionTag](
 func ThreadIDFrom(raw string) ThreadID           { return IDFrom[threadTag](raw) }
 func CheckpointIDFrom(raw string) CheckpointID   { return IDFrom[checkpointTag](raw) }
 func DeliverableIDFrom(raw string) DeliverableID { return IDFrom[deliverableTag](raw) }
+
+// Parse helpers — validate untrusted input (e.g., path params, request bodies).
+// These wrap ParseID with the correct tag and prefix so callers outside this
+// package don't need access to the unexported tag types.
+
+func ParseUserID(raw string) (UserID, error) { return ParseID[userTag](raw, PrefixUser) }
+func ParseOrgID(raw string) (OrgID, error)   { return ParseID[orgTag](raw, PrefixOrg) }
+func ParseTeamID(raw string) (TeamID, error) { return ParseID[teamTag](raw, PrefixTeam) }
+func ParseWorkspaceID(raw string) (WorkspaceID, error) {
+	return ParseID[workspaceTag](raw, PrefixWorkspace)
+}
+func ParseSeedID(raw string) (SeedID, error)     { return ParseID[seedTag](raw, PrefixSeed) }
+func ParseLeafID(raw string) (LeafID, error)     { return ParseID[leafTag](raw, PrefixLeaf) }
+func ParseBranchID(raw string) (BranchID, error) { return ParseID[branchTag](raw, PrefixBranch) }
+func ParseConnectionID(raw string) (ConnectionID, error) {
+	return ParseID[connectionTag](raw, PrefixConnection)
+}
+func ParseThreadID(raw string) (ThreadID, error) { return ParseID[threadTag](raw, PrefixThread) }
+func ParseCheckpointID(raw string) (CheckpointID, error) {
+	return ParseID[checkpointTag](raw, PrefixCheckpoint)
+}
+func ParseDeliverableID(raw string) (DeliverableID, error) {
+	return ParseID[deliverableTag](raw, PrefixDeliverable)
+}

@@ -150,3 +150,8 @@ func (n Notification) Timestamps() types.Timestamps  { return n.timestamps }
 func NotificationIDFrom(raw string) types.ID[notificationTag] {
 	return types.IDFrom[notificationTag](raw)
 }
+
+// ParseNotificationID validates and parses an untrusted notification ID string.
+func ParseNotificationID(raw string) (NotificationID, error) {
+	return types.ParseID[notificationTag](raw, prefixNotification)
+}

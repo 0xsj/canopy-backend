@@ -103,3 +103,6 @@ func (s Signal) Timestamps() types.Timestamps   { return s.timestamps }
 
 // SignalIDFrom creates a SignalID from a trusted database string.
 func SignalIDFrom(raw string) types.ID[signalTag] { return types.IDFrom[signalTag](raw) }
+
+// ParseSignalID validates and parses an untrusted signal ID string.
+func ParseSignalID(raw string) (SignalID, error) { return types.ParseID[signalTag](raw, prefixSignal) }

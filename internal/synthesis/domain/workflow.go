@@ -147,3 +147,8 @@ func (w SynthesisWorkflow) Timestamps() types.Timestamps   { return w.timestamps
 
 // SynthesisIDFrom creates a SynthesisID from a trusted database string.
 func SynthesisIDFrom(raw string) types.ID[synthesisTag] { return types.IDFrom[synthesisTag](raw) }
+
+// ParseSynthesisID validates and parses an untrusted synthesis ID string.
+func ParseSynthesisID(raw string) (SynthesisID, error) {
+	return types.ParseID[synthesisTag](raw, prefixSynthesis)
+}

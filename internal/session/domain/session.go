@@ -190,3 +190,8 @@ func (s Session) Timestamps() types.Timestamps   { return s.timestamps }
 
 // SessionIDFrom creates a SessionID from a trusted database string.
 func SessionIDFrom(raw string) types.ID[sessionTag] { return types.IDFrom[sessionTag](raw) }
+
+// ParseSessionID validates and parses an untrusted session ID string.
+func ParseSessionID(raw string) (SessionID, error) {
+	return types.ParseID[sessionTag](raw, prefixSession)
+}
