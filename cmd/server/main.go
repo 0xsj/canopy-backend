@@ -8,52 +8,19 @@ import (
 	"os/signal"
 	"syscall"
 
-	// internal: domain (tx factory return types)
-	expdomain "github.com/0xsj/canopy-backend/internal/exploration/domain"
-	orgdomain "github.com/0xsj/canopy-backend/internal/organization/domain"
-	wsdomain "github.com/0xsj/canopy-backend/internal/workspace/domain"
-
-	// internal: adapters (postgres)
-	convpg "github.com/0xsj/canopy-backend/internal/convergence/adapter/postgres"
-	delpg "github.com/0xsj/canopy-backend/internal/deliverable/adapter/postgres"
-	discpg "github.com/0xsj/canopy-backend/internal/discussion/adapter/postgres"
-	exppg "github.com/0xsj/canopy-backend/internal/exploration/adapter/postgres"
-	identitypg "github.com/0xsj/canopy-backend/internal/identity/adapter/postgres"
-	ledgerpg "github.com/0xsj/canopy-backend/internal/ledger/adapter/postgres"
-	notifpg "github.com/0xsj/canopy-backend/internal/notification/adapter/postgres"
-	orgpg "github.com/0xsj/canopy-backend/internal/organization/adapter/postgres"
-	seedpg "github.com/0xsj/canopy-backend/internal/seed/adapter/postgres"
-	sesspg "github.com/0xsj/canopy-backend/internal/session/adapter/postgres"
-	synthpg "github.com/0xsj/canopy-backend/internal/synthesis/adapter/postgres"
-	wspg "github.com/0xsj/canopy-backend/internal/workspace/adapter/postgres"
-
-	// internal: services
-	convsvc "github.com/0xsj/canopy-backend/internal/convergence/service"
-	delsvc "github.com/0xsj/canopy-backend/internal/deliverable/service"
-	discsvc "github.com/0xsj/canopy-backend/internal/discussion/service"
-	expsvc "github.com/0xsj/canopy-backend/internal/exploration/service"
-	identitysvc "github.com/0xsj/canopy-backend/internal/identity/service"
-	ledgersvc "github.com/0xsj/canopy-backend/internal/ledger/service"
-	notifsvc "github.com/0xsj/canopy-backend/internal/notification/service"
-	orgsvc "github.com/0xsj/canopy-backend/internal/organization/service"
-	seedsvc "github.com/0xsj/canopy-backend/internal/seed/service"
-	sesssvc "github.com/0xsj/canopy-backend/internal/session/service"
-	synthsvc "github.com/0xsj/canopy-backend/internal/synthesis/service"
-	wssvc "github.com/0xsj/canopy-backend/internal/workspace/service"
-
-	// internal: HTTP handlers
-	convhttp "github.com/0xsj/canopy-backend/internal/convergence/interface/http/v1"
-	delhttp "github.com/0xsj/canopy-backend/internal/deliverable/interface/http/v1"
-	dischttp "github.com/0xsj/canopy-backend/internal/discussion/interface/http/v1"
-	exphttp "github.com/0xsj/canopy-backend/internal/exploration/interface/http/v1"
-	identityhttp "github.com/0xsj/canopy-backend/internal/identity/interface/http/v1"
-	ledgerhttp "github.com/0xsj/canopy-backend/internal/ledger/interface/http/v1"
-	notifhttp "github.com/0xsj/canopy-backend/internal/notification/interface/http/v1"
-	orghttp "github.com/0xsj/canopy-backend/internal/organization/interface/http/v1"
-	seedhttp "github.com/0xsj/canopy-backend/internal/seed/interface/http/v1"
-	sesshttp "github.com/0xsj/canopy-backend/internal/session/interface/http/v1"
-	synthhttp "github.com/0xsj/canopy-backend/internal/synthesis/interface/http/v1"
-	wshttp "github.com/0xsj/canopy-backend/internal/workspace/interface/http/v1"
+	// internal: bounded context providers
+	"github.com/0xsj/canopy-backend/internal/convergence"
+	"github.com/0xsj/canopy-backend/internal/deliverable"
+	"github.com/0xsj/canopy-backend/internal/discussion"
+	"github.com/0xsj/canopy-backend/internal/exploration"
+	"github.com/0xsj/canopy-backend/internal/identity"
+	"github.com/0xsj/canopy-backend/internal/ledger"
+	"github.com/0xsj/canopy-backend/internal/notification"
+	"github.com/0xsj/canopy-backend/internal/organization"
+	"github.com/0xsj/canopy-backend/internal/seed"
+	"github.com/0xsj/canopy-backend/internal/session"
+	"github.com/0xsj/canopy-backend/internal/synthesis"
+	"github.com/0xsj/canopy-backend/internal/workspace"
 
 	// pkg
 	"github.com/0xsj/canopy-backend/pkg/auth"
@@ -139,98 +106,31 @@ func main() {
 		return broker.Health()
 	}))
 
-	// ── 7. Repositories ──────────────────────────────────────────
-	dbtx := db.DBTX()
+	// ── 7. Providers ────────────────────────────────────────────
+	identityP := identity.Wire(db, pub, log)
+	ledgerP := ledger.Wire(db, log)
+	notifP := notification.Wire(db, nil, pub, log) // no transports yet
 
-	userRepo := identitypg.NewUserRepository(dbtx)
-	orgRepo := orgpg.NewOrgRepository(dbtx)
-	orgMemberRepo := orgpg.NewMemberRepository(dbtx)
-	teamRepo := orgpg.NewTeamRepository(dbtx)
-	wsRepo := wspg.NewWorkspaceRepository(dbtx)
-	wsMemberRepo := wspg.NewWorkspaceMemberRepository(dbtx)
-	seedRepo := seedpg.NewSeedRepository(dbtx)
-	leafRepo := exppg.NewLeafRepository(dbtx)
-	branchRepo := exppg.NewBranchRepository(dbtx)
-	connRepo := exppg.NewConnectionRepository(dbtx)
-	threadRepo := discpg.NewThreadRepository(dbtx)
-	signalRepo := convpg.NewSignalRepository(dbtx)
-	checkpointRepo := convpg.NewCheckpointRepository(dbtx)
-	sessionRepo := sesspg.NewSessionRepository(dbtx)
-	synthesisRepo := synthpg.NewSynthesisRepository(dbtx)
-	deliverableRepo := delpg.NewDeliverableRepository(dbtx)
-	notifRepo := notifpg.NewNotificationRepository(dbtx)
-	notifSubRepo := notifpg.NewSubscriptionRepository(dbtx)
-	ledgerRepo := ledgerpg.NewLedgerRepository(dbtx)
+	orgP := organization.Wire(db, &userReaderAdapter{repo: identityP.UserRepo}, pub, log)
+	wsP := workspace.Wire(db, orgP.MemberRepo, pub, log)
 
-	// ── 8. Cross-context adapters ────────────────────────────────
-	userReader := &userReaderAdapter{repo: userRepo}
-	leafWriter := &leafWriterAdapter{repo: leafRepo}
-	assembler := noopContextAssembler{}
+	seedP := seed.Wire(db, wsP.MemberRepo, pub, log)
+	expP := exploration.Wire(db, wsP.MemberRepo, pub, log)
+	discP := discussion.Wire(db, wsP.MemberRepo, pub, log)
+	sessP := session.Wire(db, noopContextAssembler{}, wsP.MemberRepo, pub, log)
+	synthP := synthesis.Wire(db, wsP.MemberRepo, pub, log)
+	delP := deliverable.Wire(db, wsP.MemberRepo, pub, log)
+	convP := convergence.Wire(db, &leafWriterAdapter{repo: expP.LeafRepo}, wsP.MemberRepo, pub, log)
 
-	// ── 9. Services ──────────────────────────────────────────────
-	identitySvc := identitysvc.New(userRepo, pub, log)
+	// ── 7b. Event subscribers ───────────────────────────────────
+	cleanupSubscribers, err := registerSubscribers(ctx, sub, ledgerP.Service, log)
+	if err != nil {
+		log.Error("subscriber registration failed", logger.Err(err))
+		os.Exit(1)
+	}
+	defer cleanupSubscribers()
 
-	orgSvc := orgsvc.New(
-		orgRepo, orgMemberRepo, teamRepo,
-		userReader,
-		db,
-		func(tx database.DBTX) orgdomain.OrgRepository { return orgpg.NewOrgRepository(tx) },
-		func(tx database.DBTX) orgdomain.MemberRepository { return orgpg.NewMemberRepository(tx) },
-		pub, log,
-	)
-
-	wsSvc := wssvc.New(
-		wsRepo, wsMemberRepo,
-		orgMemberRepo, // satisfies OrgMemberReader (same FindMember shape)
-		db,
-		func(tx database.DBTX) wsdomain.WorkspaceRepository { return wspg.NewWorkspaceRepository(tx) },
-		func(tx database.DBTX) wsdomain.WorkspaceMemberRepository {
-			return wspg.NewWorkspaceMemberRepository(tx)
-		},
-		pub, log,
-	)
-
-	seedSvc := seedsvc.New(seedRepo, wsMemberRepo, pub, log)
-
-	expSvc := expsvc.New(
-		leafRepo, branchRepo, connRepo,
-		wsMemberRepo, // satisfies WorkspaceMemberReader
-		db,
-		func(tx database.DBTX) expdomain.LeafRepository { return exppg.NewLeafRepository(tx) },
-		func(tx database.DBTX) expdomain.BranchRepository { return exppg.NewBranchRepository(tx) },
-		pub, log,
-	)
-
-	discSvc := discsvc.New(threadRepo, wsMemberRepo, pub, log)
-
-	convSvc := convsvc.New(
-		signalRepo, checkpointRepo,
-		leafWriter,
-		wsMemberRepo,
-		pub, log,
-	)
-
-	sessSvc := sesssvc.New(sessionRepo, assembler, wsMemberRepo, pub, log)
-	synthSvc := synthsvc.New(synthesisRepo, wsMemberRepo, pub, log)
-	delSvc := delsvc.New(deliverableRepo, wsMemberRepo, pub, log)
-	notifSvc := notifsvc.New(notifRepo, notifSubRepo, nil, pub, log)
-	ledgerSvc := ledgersvc.New(ledgerRepo, log)
-
-	// ── 10. HTTP handlers ────────────────────────────────────────
-	identityH := identityhttp.NewHandler(identitySvc, log)
-	orgH := orghttp.NewHandler(orgSvc, log)
-	wsH := wshttp.NewHandler(wsSvc, log)
-	seedH := seedhttp.NewHandler(seedSvc, log)
-	expH := exphttp.NewHandler(expSvc, log)
-	discH := dischttp.NewHandler(discSvc, log)
-	convH := convhttp.NewHandler(convSvc, log)
-	sessH := sesshttp.NewHandler(sessSvc, log)
-	synthH := synthhttp.NewHandler(synthSvc, log)
-	delH := delhttp.NewHandler(delSvc, log)
-	notifH := notifhttp.NewHandler(notifSvc, log)
-	ledgerH := ledgerhttp.NewHandler(ledgerSvc, log)
-
-	// ── 11. Routes ───────────────────────────────────────────────
+	// ── 8. Routes ───────────────────────────────────────────────
 	mux := http.NewServeMux()
 
 	// Health — unauthenticated.
@@ -256,22 +156,22 @@ func main() {
 	})
 
 	apiMux := http.NewServeMux()
-	identityH.Register(apiMux)
-	orgH.Register(apiMux)
-	wsH.Register(apiMux)
-	seedH.Register(apiMux)
-	expH.Register(apiMux)
-	discH.Register(apiMux)
-	convH.Register(apiMux)
-	sessH.Register(apiMux)
-	synthH.Register(apiMux)
-	delH.Register(apiMux)
-	notifH.Register(apiMux)
-	ledgerH.Register(apiMux)
+	identityP.Handler.Register(apiMux)
+	orgP.Handler.Register(apiMux)
+	wsP.Handler.Register(apiMux)
+	seedP.Handler.Register(apiMux)
+	expP.Handler.Register(apiMux)
+	discP.Handler.Register(apiMux)
+	convP.Handler.Register(apiMux)
+	sessP.Handler.Register(apiMux)
+	synthP.Handler.Register(apiMux)
+	delP.Handler.Register(apiMux)
+	notifP.Handler.Register(apiMux)
+	ledgerP.Handler.Register(apiMux)
 
 	mux.Handle("/api/", auth.Middleware(validator, log)(apiMux))
 
-	// ── 12. Middleware ───────────────────────────────────────────
+	// ── 9. Middleware ───────────────────────────────────────────
 	handler := httpserver.Chain(
 		httpserver.Recovery(log),
 		httpserver.RequestID(),
@@ -281,7 +181,7 @@ func main() {
 		httpserver.Logging(log),
 	)(mux)
 
-	// ── 13. Start server + graceful shutdown ─────────────────────
+	// ── 10. Start server + graceful shutdown ─────────────────────
 	srv := httpserver.New(httpCfg, handler, log)
 
 	go func() {

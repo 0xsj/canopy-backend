@@ -21,8 +21,8 @@ func NewHandler(svc *service.Service, log logger.Logger) *Handler {
 
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/orgs", h.handleCreateOrg)
+	mux.HandleFunc("GET /api/v1/orgs", h.handleLookupOrg)
 	mux.HandleFunc("GET /api/v1/orgs/{orgId}", h.handleGetOrg)
-	mux.HandleFunc("GET /api/v1/orgs/by-slug/{slug}", h.handleGetOrgBySlug)
 	mux.HandleFunc("POST /api/v1/orgs/{orgId}/members", h.handleAddMember)
 	mux.HandleFunc("DELETE /api/v1/orgs/{orgId}/members/{userId}", h.handleRemoveMember)
 	mux.HandleFunc("PATCH /api/v1/orgs/{orgId}/members/{userId}/role", h.handleUpdateMemberRole)
@@ -65,8 +65,12 @@ func (h *Handler) handleGetOrg(w http.ResponseWriter, r *http.Request) {
 	types.WriteOK(w, OrgFromDomain(org))
 }
 
-func (h *Handler) handleGetOrgBySlug(w http.ResponseWriter, r *http.Request) {
-	slug := httpserver.PathParam(r, "slug")
+func (h *Handler) handleLookupOrg(w http.ResponseWriter, r *http.Request) {
+	slug := r.URL.Query().Get("slug")
+	if slug == "" {
+		types.WriteError(w, http.StatusBadRequest, "missing_param", "slug query parameter is required")
+		return
+	}
 
 	org, err := h.svc.FindOrgBySlug(r.Context(), slug)
 	if err != nil {

@@ -156,17 +156,22 @@ func (s *Service) StartBranch(
 		return domain.Branch{}, domain.Leaf{}, canopyerr.Wrap(err, op)
 	}
 
-	if err := branch.SetRootLeaf(leaf.ID()); err != nil {
-		return domain.Branch{}, domain.Leaf{}, canopyerr.Wrap(err, op)
-	}
-
 	if err := s.db.WithTx(ctx, func(tx pgx.Tx) error {
 		txBranches := s.newBranchRepo(tx)
 		txLeaves := s.newLeafRepo(tx)
+		// Insert branch without root_leaf_id first (leaf FK references branch).
 		if err := txBranches.Create(ctx, branch); err != nil {
 			return err
 		}
-		return txLeaves.Create(ctx, leaf)
+		// Insert leaf (references branch via FK).
+		if err := txLeaves.Create(ctx, leaf); err != nil {
+			return err
+		}
+		// Now set root_leaf_id on branch (leaf exists, FK satisfied).
+		if err := branch.SetRootLeaf(leaf.ID()); err != nil {
+			return err
+		}
+		return txBranches.Update(ctx, branch)
 	}); err != nil {
 		return domain.Branch{}, domain.Leaf{}, canopyerr.Wrap(err, op)
 	}
