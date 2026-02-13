@@ -27,20 +27,27 @@ func (s SignalType) IsValid() bool {
 // Signal records a user's reaction to a leaf. Signals are immutable
 // after creation — a user can remove a signal but not edit it.
 type Signal struct {
-	id         types.ID[signalTag]
-	leafID     types.LeafID
-	userID     types.UserID
-	signalType SignalType
-	annotation string // optional, used for flags to explain the concern
-	timestamps types.Timestamps
+	id          types.ID[signalTag]
+	workspaceID types.WorkspaceID
+	leafID      types.LeafID
+	userID      types.UserID
+	signalType  SignalType
+	annotation  string // optional, used for flags to explain the concern
+	timestamps  types.Timestamps
 }
 
 type signalTag struct{}
 
+// SignalID is the exported type alias for use in adapter packages.
+type SignalID = types.ID[signalTag]
+
 const prefixSignal = "sig"
 
 // NewSignal creates a new signal on a leaf.
-func NewSignal(leafID types.LeafID, userID types.UserID, signalType SignalType, annotation string) (Signal, error) {
+func NewSignal(workspaceID types.WorkspaceID, leafID types.LeafID, userID types.UserID, signalType SignalType, annotation string) (Signal, error) {
+	if workspaceID.IsZero() {
+		return Signal{}, fmt.Errorf("convergence: workspace ID is required")
+	}
 	if leafID.IsZero() {
 		return Signal{}, fmt.Errorf("convergence: leaf ID is required")
 	}
@@ -55,18 +62,20 @@ func NewSignal(leafID types.LeafID, userID types.UserID, signalType SignalType, 
 	}
 
 	return Signal{
-		id:         types.NewID[signalTag](prefixSignal),
-		leafID:     leafID,
-		userID:     userID,
-		signalType: signalType,
-		annotation: annotation,
-		timestamps: types.NewTimestamps(),
+		id:          types.NewID[signalTag](prefixSignal),
+		workspaceID: workspaceID,
+		leafID:      leafID,
+		userID:      userID,
+		signalType:  signalType,
+		annotation:  annotation,
+		timestamps:  types.NewTimestamps(),
 	}, nil
 }
 
 // ReconstructSignal builds a Signal from trusted data.
 func ReconstructSignal(
 	id types.ID[signalTag],
+	workspaceID types.WorkspaceID,
 	leafID types.LeafID,
 	userID types.UserID,
 	signalType SignalType,
@@ -74,18 +83,23 @@ func ReconstructSignal(
 	timestamps types.Timestamps,
 ) Signal {
 	return Signal{
-		id:         id,
-		leafID:     leafID,
-		userID:     userID,
-		signalType: signalType,
-		annotation: annotation,
-		timestamps: timestamps,
+		id:          id,
+		workspaceID: workspaceID,
+		leafID:      leafID,
+		userID:      userID,
+		signalType:  signalType,
+		annotation:  annotation,
+		timestamps:  timestamps,
 	}
 }
 
-func (s Signal) ID() types.ID[signalTag]      { return s.id }
-func (s Signal) LeafID() types.LeafID         { return s.leafID }
-func (s Signal) UserID() types.UserID         { return s.userID }
-func (s Signal) Type() SignalType             { return s.signalType }
-func (s Signal) Annotation() string           { return s.annotation }
-func (s Signal) Timestamps() types.Timestamps { return s.timestamps }
+func (s Signal) ID() types.ID[signalTag]        { return s.id }
+func (s Signal) WorkspaceID() types.WorkspaceID { return s.workspaceID }
+func (s Signal) LeafID() types.LeafID           { return s.leafID }
+func (s Signal) UserID() types.UserID           { return s.userID }
+func (s Signal) Type() SignalType               { return s.signalType }
+func (s Signal) Annotation() string             { return s.annotation }
+func (s Signal) Timestamps() types.Timestamps   { return s.timestamps }
+
+// SignalIDFrom creates a SignalID from a trusted database string.
+func SignalIDFrom(raw string) types.ID[signalTag] { return types.IDFrom[signalTag](raw) }

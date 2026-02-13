@@ -20,6 +20,9 @@ type SystemEntry struct {
 
 type systemEntryTag struct{}
 
+// SystemEntryID is the exported type alias for use in adapter packages.
+type SystemEntryID = types.ID[systemEntryTag]
+
 const prefixSystemEntry = "sye"
 
 // NewSystemEntry creates a new system-level audit entry.
@@ -70,6 +73,9 @@ func (e SystemEntry) EventData() map[string]any    { return e.eventData }
 func (e SystemEntry) SourceContext() string        { return e.sourceContext }
 func (e SystemEntry) CreatedAt() types.Timestamp   { return e.createdAt }
 
+// SystemEntryIDFrom creates a SystemEntryID from a trusted database string.
+func SystemEntryIDFrom(raw string) types.ID[systemEntryTag] { return types.IDFrom[systemEntryTag](raw) }
+
 // Action describes a domain-meaningful operation for audit purposes.
 type Action string
 
@@ -101,6 +107,9 @@ type DomainEntry struct {
 }
 
 type domainEntryTag struct{}
+
+// DomainEntryID is the exported type alias for use in adapter packages.
+type DomainEntryID = types.ID[domainEntryTag]
 
 const prefixDomainEntry = "dme"
 
@@ -181,3 +190,6 @@ func (e DomainEntry) OrgID() string                { return e.orgID }
 func (e DomainEntry) WorkspaceID() string          { return e.workspaceID }
 func (e DomainEntry) Metadata() map[string]any     { return e.metadata }
 func (e DomainEntry) CreatedAt() types.Timestamp   { return e.createdAt }
+
+// DomainEntryIDFrom creates a DomainEntryID from a trusted database string.
+func DomainEntryIDFrom(raw string) types.ID[domainEntryTag] { return types.IDFrom[domainEntryTag](raw) }

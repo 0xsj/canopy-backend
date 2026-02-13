@@ -7,7 +7,7 @@ import (
 )
 
 func TestNewSignal_ValidUpvote(t *testing.T) {
-	sig, err := NewSignal(types.NewLeafID(), types.NewUserID(), SignalUpvote, "")
+	sig, err := NewSignal(types.NewWorkspaceID(), types.NewLeafID(), types.NewUserID(), SignalUpvote, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -18,12 +18,12 @@ func TestNewSignal_ValidUpvote(t *testing.T) {
 }
 
 func TestNewSignal_FlagRequiresAnnotation(t *testing.T) {
-	_, err := NewSignal(types.NewLeafID(), types.NewUserID(), SignalFlag, "")
+	_, err := NewSignal(types.NewWorkspaceID(), types.NewLeafID(), types.NewUserID(), SignalFlag, "")
 	if err == nil {
 		t.Fatal("expected error for flag without annotation")
 	}
 
-	sig, err := NewSignal(types.NewLeafID(), types.NewUserID(), SignalFlag, "Needs clarification")
+	sig, err := NewSignal(types.NewWorkspaceID(), types.NewLeafID(), types.NewUserID(), SignalFlag, "Needs clarification")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestNewSignal_FlagRequiresAnnotation(t *testing.T) {
 }
 
 func TestNewSignal_RejectsInvalidType(t *testing.T) {
-	_, err := NewSignal(types.NewLeafID(), types.NewUserID(), "star", "")
+	_, err := NewSignal(types.NewWorkspaceID(), types.NewLeafID(), types.NewUserID(), "star", "")
 	if err == nil {
 		t.Fatal("expected error for invalid signal type")
 	}

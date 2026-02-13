@@ -125,3 +125,18 @@ func NewConnectionID() ConnectionID   { return NewID[connectionTag](PrefixConnec
 func NewThreadID() ThreadID           { return NewID[threadTag](PrefixThread) }
 func NewCheckpointID() CheckpointID   { return NewID[checkpointTag](PrefixCheckpoint) }
 func NewDeliverableID() DeliverableID { return NewID[deliverableTag](PrefixDeliverable) }
+
+// Reconstruction helpers — create typed IDs from trusted database strings.
+// No validation is performed; use ParseID for untrusted input.
+
+func UserIDFrom(raw string) UserID               { return IDFrom[userTag](raw) }
+func OrgIDFrom(raw string) OrgID                 { return IDFrom[orgTag](raw) }
+func TeamIDFrom(raw string) TeamID               { return IDFrom[teamTag](raw) }
+func WorkspaceIDFrom(raw string) WorkspaceID     { return IDFrom[workspaceTag](raw) }
+func SeedIDFrom(raw string) SeedID               { return IDFrom[seedTag](raw) }
+func LeafIDFrom(raw string) LeafID               { return IDFrom[leafTag](raw) }
+func BranchIDFrom(raw string) BranchID           { return IDFrom[branchTag](raw) }
+func ConnectionIDFrom(raw string) ConnectionID   { return IDFrom[connectionTag](raw) }
+func ThreadIDFrom(raw string) ThreadID           { return IDFrom[threadTag](raw) }
+func CheckpointIDFrom(raw string) CheckpointID   { return IDFrom[checkpointTag](raw) }
+func DeliverableIDFrom(raw string) DeliverableID { return IDFrom[deliverableTag](raw) }

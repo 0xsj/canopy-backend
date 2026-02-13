@@ -73,6 +73,9 @@ type Session struct {
 
 type sessionTag struct{}
 
+// SessionID is the exported type alias for use in adapter packages.
+type SessionID = types.ID[sessionTag]
+
 const prefixSession = "ses"
 
 // NewSession creates a new active session.
@@ -184,3 +187,6 @@ func (s Session) Type() SessionType              { return s.sessionType }
 func (s Session) Status() SessionStatus          { return s.status }
 func (s Session) Messages() []Message            { return s.messages }
 func (s Session) Timestamps() types.Timestamps   { return s.timestamps }
+
+// SessionIDFrom creates a SessionID from a trusted database string.
+func SessionIDFrom(raw string) types.ID[sessionTag] { return types.IDFrom[sessionTag](raw) }

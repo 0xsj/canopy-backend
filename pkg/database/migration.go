@@ -35,6 +35,9 @@ func NewMigrator(db *DB, schema string, log logger.Logger) *Migrator {
 //	  001_create_leaves.sql
 //	  002_add_tags_column.sql
 func (m *Migrator) Run(ctx context.Context, migrations fs.FS) error {
+	if err := m.ensureSchema(ctx); err != nil {
+		return err
+	}
 	if err := m.ensureTable(ctx); err != nil {
 		return err
 	}
@@ -72,6 +75,14 @@ type migrationFile struct {
 	name    string
 	version string
 	sql     string
+}
+
+func (m *Migrator) ensureSchema(ctx context.Context) error {
+	_, err := m.db.pool.Exec(ctx, fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s", m.schema))
+	if err != nil {
+		return fmt.Errorf("database: create schema %s: %w", m.schema, err)
+	}
+	return nil
 }
 
 func (m *Migrator) ensureTable(ctx context.Context) error {
@@ -165,4 +176,37 @@ func (m *Migrator) apply(ctx context.Context, mf migrationFile) error {
 
 		return nil
 	})
+}
+
+// MigrationSet collects schema-scoped migrations for batch execution.
+// The composition root uses this to run all bounded-context migrations at startup.
+type MigrationSet struct {
+	entries []migrationEntry
+}
+
+type migrationEntry struct {
+	schema     string
+	migrations fs.FS
+}
+
+// NewMigrationSet creates an empty migration set.
+func NewMigrationSet() *MigrationSet {
+	return &MigrationSet{}
+}
+
+// Add registers migrations for a schema. Call once per bounded context.
+func (ms *MigrationSet) Add(schema string, migrations fs.FS) {
+	ms.entries = append(ms.entries, migrationEntry{schema: schema, migrations: migrations})
+}
+
+// RunAll applies all registered migrations in order. Each schema is migrated
+// independently with its own Migrator instance.
+func (ms *MigrationSet) RunAll(ctx context.Context, db *DB, log logger.Logger) error {
+	for _, entry := range ms.entries {
+		migrator := NewMigrator(db, entry.schema, log)
+		if err := migrator.Run(ctx, entry.migrations); err != nil {
+			return fmt.Errorf("database: migrate %s: %w", entry.schema, err)
+		}
+	}
+	return nil
 }

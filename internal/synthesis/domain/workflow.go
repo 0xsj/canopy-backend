@@ -46,6 +46,9 @@ type SynthesisWorkflow struct {
 
 type synthesisTag struct{}
 
+// SynthesisID is the exported type alias for use in adapter packages.
+type SynthesisID = types.ID[synthesisTag]
+
 const prefixSynthesis = "syn"
 
 // NewSynthesisWorkflow creates a new pending synthesis workflow.
@@ -141,3 +144,6 @@ func (w SynthesisWorkflow) ResultLeafID() types.LeafID     { return w.resultLeaf
 func (w SynthesisWorkflow) Status() WorkflowStatus         { return w.status }
 func (w SynthesisWorkflow) FailureReason() string          { return w.failureReason }
 func (w SynthesisWorkflow) Timestamps() types.Timestamps   { return w.timestamps }
+
+// SynthesisIDFrom creates a SynthesisID from a trusted database string.
+func SynthesisIDFrom(raw string) types.ID[synthesisTag] { return types.IDFrom[synthesisTag](raw) }

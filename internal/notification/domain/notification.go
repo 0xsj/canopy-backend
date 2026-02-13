@@ -49,6 +49,9 @@ type Notification struct {
 
 type notificationTag struct{}
 
+// NotificationID is the exported type alias for use in adapter packages.
+type NotificationID = types.ID[notificationTag]
+
 const prefixNotification = "ntf"
 
 // NewNotification creates a new pending notification.
@@ -142,3 +145,8 @@ func (n Notification) ResourceID() string            { return n.resourceID }
 func (n Notification) WorkspaceID() string           { return n.workspaceID }
 func (n Notification) Status() NotificationStatus    { return n.status }
 func (n Notification) Timestamps() types.Timestamps  { return n.timestamps }
+
+// NotificationIDFrom creates a NotificationID from a trusted database string.
+func NotificationIDFrom(raw string) types.ID[notificationTag] {
+	return types.IDFrom[notificationTag](raw)
+}
