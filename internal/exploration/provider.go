@@ -23,9 +23,10 @@ func Wire(db *database.DB, wsMembers service.WorkspaceMemberReader, pub events.P
 	leafRepo := postgres.NewLeafRepository(dbtx)
 	branchRepo := postgres.NewBranchRepository(dbtx)
 	connRepo := postgres.NewConnectionRepository(dbtx)
+	graphEngine := postgres.NewGraphQueryEngine(dbtx)
 
 	svc := service.New(
-		leafRepo, branchRepo, connRepo,
+		leafRepo, branchRepo, connRepo, graphEngine,
 		wsMembers,
 		db,
 		func(tx database.DBTX) domain.LeafRepository { return postgres.NewLeafRepository(tx) },

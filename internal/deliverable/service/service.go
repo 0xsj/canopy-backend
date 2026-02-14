@@ -119,7 +119,10 @@ func (s *Service) Finalize(ctx context.Context, deliverableID types.DeliverableI
 		return domain.Deliverable{}, canopyerr.Wrap(err, op)
 	}
 
-	// Finalization is recorded as an update to persist the final state.
+	if err := deliverable.Finalize(); err != nil {
+		return domain.Deliverable{}, canopyerr.Wrap(err, op)
+	}
+
 	if err := s.repo.Update(ctx, deliverable); err != nil {
 		return domain.Deliverable{}, canopyerr.Wrap(err, op)
 	}

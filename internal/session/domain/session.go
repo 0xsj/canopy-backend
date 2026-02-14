@@ -60,15 +60,16 @@ type Message struct {
 // (refining toward a structured leaf). The session tracks the full
 // conversation history and produces a leaf on completion.
 type Session struct {
-	id           types.ID[sessionTag]
-	workspaceID  types.WorkspaceID
-	userID       types.UserID
-	seedID       types.SeedID
-	parentLeafID types.LeafID // zero if exploring from seed directly
-	sessionType  SessionType
-	status       SessionStatus
-	messages     []Message
-	timestamps   types.Timestamps
+	id            types.ID[sessionTag]
+	workspaceID   types.WorkspaceID
+	userID        types.UserID
+	seedID        types.SeedID
+	parentLeafID  types.LeafID // zero if exploring from seed directly
+	sourceLeafIDs []types.LeafID
+	sessionType   SessionType
+	status        SessionStatus
+	messages      []Message
+	timestamps    types.Timestamps
 }
 
 type sessionTag struct{}
@@ -84,6 +85,7 @@ func NewSession(
 	userID types.UserID,
 	seedID types.SeedID,
 	parentLeafID types.LeafID,
+	sourceLeafIDs []types.LeafID,
 	sessionType SessionType,
 ) (Session, error) {
 	if workspaceID.IsZero() {
@@ -100,15 +102,16 @@ func NewSession(
 	}
 
 	return Session{
-		id:           types.NewID[sessionTag](prefixSession),
-		workspaceID:  workspaceID,
-		userID:       userID,
-		seedID:       seedID,
-		parentLeafID: parentLeafID,
-		sessionType:  sessionType,
-		status:       StatusActive,
-		messages:     nil,
-		timestamps:   types.NewMutableTimestamps(),
+		id:            types.NewID[sessionTag](prefixSession),
+		workspaceID:   workspaceID,
+		userID:        userID,
+		seedID:        seedID,
+		parentLeafID:  parentLeafID,
+		sourceLeafIDs: sourceLeafIDs,
+		sessionType:   sessionType,
+		status:        StatusActive,
+		messages:      nil,
+		timestamps:    types.NewMutableTimestamps(),
 	}, nil
 }
 
@@ -119,21 +122,23 @@ func ReconstructSession(
 	userID types.UserID,
 	seedID types.SeedID,
 	parentLeafID types.LeafID,
+	sourceLeafIDs []types.LeafID,
 	sessionType SessionType,
 	status SessionStatus,
 	messages []Message,
 	timestamps types.Timestamps,
 ) Session {
 	return Session{
-		id:           id,
-		workspaceID:  workspaceID,
-		userID:       userID,
-		seedID:       seedID,
-		parentLeafID: parentLeafID,
-		sessionType:  sessionType,
-		status:       status,
-		messages:     messages,
-		timestamps:   timestamps,
+		id:            id,
+		workspaceID:   workspaceID,
+		userID:        userID,
+		seedID:        seedID,
+		parentLeafID:  parentLeafID,
+		sourceLeafIDs: sourceLeafIDs,
+		sessionType:   sessionType,
+		status:        status,
+		messages:      messages,
+		timestamps:    timestamps,
 	}
 }
 
@@ -183,6 +188,7 @@ func (s Session) WorkspaceID() types.WorkspaceID { return s.workspaceID }
 func (s Session) UserID() types.UserID           { return s.userID }
 func (s Session) SeedID() types.SeedID           { return s.seedID }
 func (s Session) ParentLeafID() types.LeafID     { return s.parentLeafID }
+func (s Session) SourceLeafIDs() []types.LeafID  { return s.sourceLeafIDs }
 func (s Session) Type() SessionType              { return s.sessionType }
 func (s Session) Status() SessionStatus          { return s.status }
 func (s Session) Messages() []Message            { return s.messages }

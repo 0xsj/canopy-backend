@@ -11,6 +11,9 @@ type NotificationRepository interface {
 	// Create persists a new notification.
 	Create(ctx context.Context, notification Notification) error
 
+	// FindByID returns a notification by ID.
+	FindByID(ctx context.Context, id NotificationID) (Notification, error)
+
 	// FindByUser returns notifications for a user, ordered by most recent.
 	FindByUser(ctx context.Context, userID types.UserID, limit int) ([]Notification, error)
 

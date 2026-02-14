@@ -12,16 +12,36 @@ import (
 	"github.com/0xsj/canopy-backend/pkg/types"
 )
 
+// Encryptor provides symmetric encryption for sensitive data (API keys).
+type Encryptor interface {
+	Encrypt(plaintext []byte) ([]byte, error)
+	Decrypt(ciphertext []byte) ([]byte, error)
+}
+
 // Service implements the identity application logic.
 type Service struct {
-	repo domain.UserRepository
-	pub  events.Publisher
-	log  logger.Logger
+	repo       domain.UserRepository
+	llmConfigs domain.UserLLMConfigRepository
+	encryptor  Encryptor
+	pub        events.Publisher
+	log        logger.Logger
 }
 
 // New creates a new identity service.
-func New(repo domain.UserRepository, pub events.Publisher, log logger.Logger) *Service {
-	return &Service{repo: repo, pub: pub, log: log}
+func New(
+	repo domain.UserRepository,
+	llmConfigs domain.UserLLMConfigRepository,
+	encryptor Encryptor,
+	pub events.Publisher,
+	log logger.Logger,
+) *Service {
+	return &Service{
+		repo:       repo,
+		llmConfigs: llmConfigs,
+		encryptor:  encryptor,
+		pub:        pub,
+		log:        log,
+	}
 }
 
 // Register creates a user record on first login. If the user already exists
@@ -113,6 +133,119 @@ func (s *Service) UpdateProfile(ctx context.Context, displayName, email, avatarU
 	})
 
 	return user, nil
+}
+
+// --- User LLM Config ---
+
+// UserLLMConfigResult holds a decrypted user LLM config for the handler to render.
+type UserLLMConfigResult struct {
+	UserID     types.UserID
+	Provider   string
+	Model      string
+	APIKey     string // decrypted plaintext, masked by handler
+	Timestamps types.Timestamps
+}
+
+// SetLLMConfig sets or updates the authenticated user's personal LLM configuration.
+func (s *Service) SetLLMConfig(ctx context.Context, provider, model, apiKey string) error {
+	const op = "identity: set llm config"
+
+	callerID, err := s.authenticatedUserID(ctx)
+	if err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	enc, err := s.encryptor.Encrypt([]byte(apiKey))
+	if err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	cfg, err := domain.NewUserLLMConfig(callerID, provider, model, enc)
+	if err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	if err := s.llmConfigs.Upsert(ctx, cfg); err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	s.publish(ctx, domain.SubjectUserLLMConfigUpdated, "", domain.UserLLMConfigUpdatedData{
+		UserID:    callerID.String(),
+		Provider:  provider,
+		Model:     model,
+		Timestamp: time.Now().UTC(),
+	})
+
+	s.log.Info("user llm config updated",
+		logger.String("user_id", callerID.String()),
+		logger.String("provider", provider),
+		logger.String("model", model),
+	)
+
+	return nil
+}
+
+// GetLLMConfig returns the authenticated user's personal LLM configuration.
+func (s *Service) GetLLMConfig(ctx context.Context) (UserLLMConfigResult, error) {
+	const op = "identity: get llm config"
+
+	callerID, err := s.authenticatedUserID(ctx)
+	if err != nil {
+		return UserLLMConfigResult{}, canopyerr.Wrap(err, op)
+	}
+
+	cfg, err := s.llmConfigs.FindByUser(ctx, callerID)
+	if err != nil {
+		return UserLLMConfigResult{}, canopyerr.Wrap(err, op)
+	}
+
+	plainKey, err := s.encryptor.Decrypt(cfg.APIKeyEnc())
+	if err != nil {
+		return UserLLMConfigResult{}, canopyerr.Wrap(err, op)
+	}
+
+	return UserLLMConfigResult{
+		UserID:     cfg.UserID(),
+		Provider:   string(cfg.Provider()),
+		Model:      cfg.Model(),
+		APIKey:     string(plainKey),
+		Timestamps: cfg.Timestamps(),
+	}, nil
+}
+
+// DeleteLLMConfig removes the authenticated user's personal LLM configuration.
+func (s *Service) DeleteLLMConfig(ctx context.Context) error {
+	const op = "identity: delete llm config"
+
+	callerID, err := s.authenticatedUserID(ctx)
+	if err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	if err := s.llmConfigs.Delete(ctx, callerID); err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	s.publish(ctx, domain.SubjectUserLLMConfigDeleted, "", domain.UserLLMConfigDeletedData{
+		UserID:    callerID.String(),
+		Timestamp: time.Now().UTC(),
+	})
+
+	s.log.Info("user llm config deleted",
+		logger.String("user_id", callerID.String()),
+	)
+
+	return nil
+}
+
+// --- Auth Helpers ---
+
+func (s *Service) authenticatedUserID(ctx context.Context) (types.UserID, error) {
+	claims, ok := auth.FromClaims(ctx)
+	if !ok {
+		return types.UserID{}, canopyerr.ErrUnauthenticated
+	}
+	return types.UserIDFrom(claims.Subject), nil
 }
 
 // publish is a fire-and-forget helper. Failures are logged, not returned.

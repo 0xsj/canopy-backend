@@ -48,14 +48,17 @@ func TestNewLeaf_RejectsEmptyTitle(t *testing.T) {
 	}
 }
 
-func TestNewLeaf_RejectsEmptySummary(t *testing.T) {
-	_, err := NewLeaf(
+func TestNewLeaf_AllowsEmptySummary(t *testing.T) {
+	leaf, err := NewLeaf(
 		types.NewWorkspaceID(), types.NewSeedID(), types.NewBranchID(),
 		types.NewUserID(), types.LeafID{}, "Title", "",
 		nil, nil, nil,
 	)
-	if err == nil {
-		t.Fatal("expected error for empty summary")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if leaf.Summary() != "" {
+		t.Errorf("summary = %q, want empty", leaf.Summary())
 	}
 }
 

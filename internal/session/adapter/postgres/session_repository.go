@@ -44,6 +44,19 @@ func (r *SessionRepository) FindByID(ctx context.Context, id domain.SessionID) (
 	return s, nil
 }
 
+func (r *SessionRepository) FindByWorkspace(ctx context.Context, workspaceID types.WorkspaceID) ([]domain.Session, error) {
+	const op = "session: find sessions by workspace"
+	rows, err := r.q.FindSessionsByWorkspace(ctx, workspaceID.String())
+	if err != nil {
+		return nil, database.MapQueryError(err, op)
+	}
+	sessions, err := sessionsToDomain(rows)
+	if err != nil {
+		return nil, database.MapQueryError(err, op)
+	}
+	return sessions, nil
+}
+
 func (r *SessionRepository) FindActiveByUser(ctx context.Context, workspaceID types.WorkspaceID, userID types.UserID) ([]domain.Session, error) {
 	const op = "session: find active sessions by user"
 	rows, err := r.q.FindActiveSessionsByUser(ctx, sqlc.FindActiveSessionsByUserParams{

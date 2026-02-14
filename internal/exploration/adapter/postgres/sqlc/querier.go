@@ -31,6 +31,7 @@ type Querier interface {
 	FindLeavesByWorkspace(ctx context.Context, arg FindLeavesByWorkspaceParams) ([]Leafe, error)
 	UpdateBranch(ctx context.Context, arg UpdateBranchParams) (pgconn.CommandTag, error)
 	UpdateLeafLayer(ctx context.Context, arg UpdateLeafLayerParams) (pgconn.CommandTag, error)
+	UpdateLeafPosition(ctx context.Context, arg UpdateLeafPositionParams) (pgconn.CommandTag, error)
 }
 
 var _ Querier = (*Queries)(nil)

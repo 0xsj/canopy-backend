@@ -13,9 +13,13 @@ import (
 	"github.com/0xsj/canopy-backend/internal/deliverable"
 	"github.com/0xsj/canopy-backend/internal/discussion"
 	"github.com/0xsj/canopy-backend/internal/exploration"
+	exppostgres "github.com/0xsj/canopy-backend/internal/exploration/adapter/postgres"
+	expdomain "github.com/0xsj/canopy-backend/internal/exploration/domain"
 	"github.com/0xsj/canopy-backend/internal/identity"
 	"github.com/0xsj/canopy-backend/internal/ledger"
 	"github.com/0xsj/canopy-backend/internal/notification"
+	"github.com/0xsj/canopy-backend/internal/notification/adapter/inapp"
+	notifdomain "github.com/0xsj/canopy-backend/internal/notification/domain"
 	"github.com/0xsj/canopy-backend/internal/organization"
 	"github.com/0xsj/canopy-backend/internal/seed"
 	"github.com/0xsj/canopy-backend/internal/session"
@@ -25,10 +29,12 @@ import (
 	// pkg
 	"github.com/0xsj/canopy-backend/pkg/auth"
 	"github.com/0xsj/canopy-backend/pkg/config"
+	"github.com/0xsj/canopy-backend/pkg/crypto"
 	"github.com/0xsj/canopy-backend/pkg/database"
 	"github.com/0xsj/canopy-backend/pkg/events"
 	"github.com/0xsj/canopy-backend/pkg/health"
 	"github.com/0xsj/canopy-backend/pkg/httpserver"
+	"github.com/0xsj/canopy-backend/pkg/llm"
 	"github.com/0xsj/canopy-backend/pkg/observability/logger"
 	"github.com/0xsj/canopy-backend/pkg/websocket"
 )
@@ -42,12 +48,16 @@ func main() {
 	var dbCfg database.Config
 	var eventsCfg events.Config
 	var wsCfg websocket.Config
+	var llmCfg llm.Config
+	var cryptoCfg crypto.Config
 
 	loader := config.NewLoader("CANOPY")
 	loader.Register("HTTP", &httpCfg)
 	loader.Register("DATABASE", &dbCfg)
 	loader.Register("EVENTS", &eventsCfg)
 	loader.Register("WS", &wsCfg)
+	loader.Register("LLM", &llmCfg)
+	loader.Register("CRYPTO", &cryptoCfg)
 
 	if err := loader.LoadAll(); err != nil {
 		fmt.Fprintf(os.Stderr, "fatal: %s\n", err)
@@ -106,24 +116,58 @@ func main() {
 		return broker.Health()
 	}))
 
+	// ── 6b. LLM provider ─────────────────────────────────────────
+	llmProvider, err := llm.NewProvider(ctx, llmCfg, log)
+	if err != nil {
+		log.Error("llm provider init failed", logger.Err(err))
+		os.Exit(1)
+	}
+
+	// ── 6c. Encryption cipher ────────────────────────────────────
+	keyBytes, err := cryptoCfg.KeyBytes()
+	if err != nil {
+		log.Error("crypto key decode failed", logger.Err(err))
+		os.Exit(1)
+	}
+	cipher, err := crypto.NewAES256GCM(keyBytes)
+	if err != nil {
+		log.Error("cipher init failed", logger.Err(err))
+		os.Exit(1)
+	}
+
 	// ── 7. Providers ────────────────────────────────────────────
-	identityP := identity.Wire(db, pub, log)
+	identityP := identity.Wire(db, cipher, pub, log)
 	ledgerP := ledger.Wire(db, log)
-	notifP := notification.Wire(db, nil, pub, log) // no transports yet
+	notifP := notification.Wire(db, []notifdomain.NotificationTransport{inapp.NewTransport()}, pub, log)
 
 	orgP := organization.Wire(db, &userReaderAdapter{repo: identityP.UserRepo}, pub, log)
-	wsP := workspace.Wire(db, orgP.MemberRepo, pub, log)
+	wsP := workspace.Wire(db, orgP.MemberRepo, cipher, pub, log)
 
 	seedP := seed.Wire(db, wsP.MemberRepo, pub, log)
 	expP := exploration.Wire(db, wsP.MemberRepo, pub, log)
 	discP := discussion.Wire(db, wsP.MemberRepo, pub, log)
-	sessP := session.Wire(db, noopContextAssembler{}, wsP.MemberRepo, pub, log)
-	synthP := synthesis.Wire(db, wsP.MemberRepo, pub, log)
+
+	// LLM resolver: user > workspace > server-wide fallback.
+	resolver := newLLMProviderResolver(wsP.LLMConfigRepo, identityP.LLMConfigRepo, cipher, llmProvider, log)
+
+	assembler := &contextAssembler{seeds: seedP.SeedRepo, leaves: expP.LeafRepo, log: log}
+	sessP := session.Wire(db, assembler, resolver, wsP.MemberRepo, pub, log)
+
+	synthP := synthesis.Wire(db, resolver,
+		&sourceLeafReaderAdapter{repo: expP.LeafRepo},
+		&seedReaderForSynthesisAdapter{repo: seedP.SeedRepo},
+		&synthesisLeafCreatorAdapter{
+			db:            db,
+			newLeafRepo:   func(tx database.DBTX) expdomain.LeafRepository { return exppostgres.NewLeafRepository(tx) },
+			newBranchRepo: func(tx database.DBTX) expdomain.BranchRepository { return exppostgres.NewBranchRepository(tx) },
+		},
+		wsP.MemberRepo, pub, log,
+	)
 	delP := deliverable.Wire(db, wsP.MemberRepo, pub, log)
 	convP := convergence.Wire(db, &leafWriterAdapter{repo: expP.LeafRepo}, wsP.MemberRepo, pub, log)
 
 	// ── 7b. Event subscribers ───────────────────────────────────
-	cleanupSubscribers, err := registerSubscribers(ctx, sub, ledgerP.Service, log)
+	cleanupSubscribers, err := registerSubscribers(ctx, sub, ledgerP.Service, notifP.Service, wsP.MemberRepo, resolver, log)
 	if err != nil {
 		log.Error("subscriber registration failed", logger.Err(err))
 		os.Exit(1)

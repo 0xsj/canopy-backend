@@ -12,6 +12,7 @@ type DeliverableResponse struct {
 	Content       string           `json:"content"`
 	SourceLeafIDs []string         `json:"source_leaf_ids"`
 	Version       int              `json:"version"`
+	Finalized     bool             `json:"finalized"`
 	CreatedAt     types.Timestamp  `json:"created_at"`
 	UpdatedAt     *types.Timestamp `json:"updated_at,omitempty"`
 }
@@ -29,6 +30,7 @@ func DeliverableFromDomain(d domain.Deliverable) DeliverableResponse {
 		Content:       d.Content(),
 		SourceLeafIDs: leafIDs,
 		Version:       d.Version(),
+		Finalized:     d.Finalized(),
 		CreatedAt:     ts.CreatedAt,
 		UpdatedAt:     ts.UpdatedAt,
 	}

@@ -35,6 +35,7 @@ type Deliverable struct {
 	content       string
 	sourceLeafIDs []types.LeafID
 	version       int
+	finalized     bool
 	timestamps    types.Timestamps
 }
 
@@ -80,6 +81,7 @@ func ReconstructDeliverable(
 	content string,
 	sourceLeafIDs []types.LeafID,
 	version int,
+	finalized bool,
 	timestamps types.Timestamps,
 ) Deliverable {
 	return Deliverable{
@@ -89,12 +91,26 @@ func ReconstructDeliverable(
 		content:       content,
 		sourceLeafIDs: sourceLeafIDs,
 		version:       version,
+		finalized:     finalized,
 		timestamps:    timestamps,
 	}
 }
 
+// Finalize marks the deliverable as final. No further edits are allowed.
+func (d *Deliverable) Finalize() error {
+	if d.finalized {
+		return fmt.Errorf("deliverable: already finalized")
+	}
+	d.finalized = true
+	d.timestamps.Touch()
+	return nil
+}
+
 // UpdateContent replaces the deliverable's content and increments the version.
 func (d *Deliverable) UpdateContent(content string) error {
+	if d.finalized {
+		return fmt.Errorf("deliverable: cannot edit finalized deliverable")
+	}
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return fmt.Errorf("deliverable: content is required")
@@ -111,6 +127,9 @@ func (d *Deliverable) UpdateContent(content string) error {
 
 // ChangeFormat updates the deliverable's output format.
 func (d *Deliverable) ChangeFormat(format Format) error {
+	if d.finalized {
+		return fmt.Errorf("deliverable: cannot edit finalized deliverable")
+	}
 	if !format.IsValid() {
 		return fmt.Errorf("deliverable: invalid format %q", format)
 	}
@@ -125,6 +144,9 @@ func (d *Deliverable) ChangeFormat(format Format) error {
 
 // AddSourceLeaf adds a leaf to the deliverable's source attribution.
 func (d *Deliverable) AddSourceLeaf(leafID types.LeafID) error {
+	if d.finalized {
+		return fmt.Errorf("deliverable: cannot edit finalized deliverable")
+	}
 	if leafID.IsZero() {
 		return fmt.Errorf("deliverable: leaf ID is required")
 	}
@@ -144,4 +166,5 @@ func (d Deliverable) Format() Format                 { return d.format }
 func (d Deliverable) Content() string                { return d.content }
 func (d Deliverable) SourceLeafIDs() []types.LeafID  { return d.sourceLeafIDs }
 func (d Deliverable) Version() int                   { return d.version }
+func (d Deliverable) Finalized() bool                { return d.finalized }
 func (d Deliverable) Timestamps() types.Timestamps   { return d.timestamps }

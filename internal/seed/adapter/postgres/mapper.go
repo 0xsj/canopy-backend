@@ -27,6 +27,8 @@ func seedToCreateParams(s domain.Seed) (sqlc.CreateSeedParams, error) {
 		Tags:        s.Tags(),
 		CreatedAt:   ts.CreatedAt.Time(),
 		UpdatedAt:   database.TsUpdatedAt(ts),
+		PositionX:   s.PositionX(),
+		PositionY:   s.PositionY(),
 	}, nil
 }
 
@@ -62,6 +64,7 @@ func seedToDomain(row sqlc.Seed) (domain.Seed, error) {
 		database.DerefString(row.Description),
 		constraints,
 		row.Tags,
+		row.PositionX, row.PositionY,
 		types.Timestamps{
 			CreatedAt: types.TimestampFrom(row.CreatedAt),
 			UpdatedAt: &updatedTS,

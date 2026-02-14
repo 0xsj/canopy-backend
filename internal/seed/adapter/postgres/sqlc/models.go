@@ -19,4 +19,6 @@ type Seed struct {
 	Tags        []string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	PositionX   float64
+	PositionY   float64
 }

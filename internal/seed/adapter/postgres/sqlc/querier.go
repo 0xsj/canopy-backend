@@ -15,6 +15,7 @@ type Querier interface {
 	FindSeedByID(ctx context.Context, id string) (Seed, error)
 	FindSeedsByWorkspace(ctx context.Context, workspaceID string) ([]Seed, error)
 	UpdateSeed(ctx context.Context, arg UpdateSeedParams) (pgconn.CommandTag, error)
+	UpdateSeedPosition(ctx context.Context, arg UpdateSeedPositionParams) (pgconn.CommandTag, error)
 }
 
 var _ Querier = (*Queries)(nil)

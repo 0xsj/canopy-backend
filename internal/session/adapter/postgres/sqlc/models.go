@@ -10,14 +10,15 @@ import (
 )
 
 type Session struct {
-	ID           string
-	WorkspaceID  string
-	UserID       string
-	SeedID       string
-	ParentLeafID *string
-	SessionType  string
-	Status       string
-	Messages     json.RawMessage
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID            string
+	WorkspaceID   string
+	UserID        string
+	SeedID        string
+	ParentLeafID  *string
+	SessionType   string
+	Status        string
+	Messages      json.RawMessage
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	SourceLeafIds []string
 }

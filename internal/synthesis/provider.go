@@ -6,6 +6,7 @@ import (
 	"github.com/0xsj/canopy-backend/internal/synthesis/service"
 	"github.com/0xsj/canopy-backend/pkg/database"
 	"github.com/0xsj/canopy-backend/pkg/events"
+	"github.com/0xsj/canopy-backend/pkg/llm"
 	"github.com/0xsj/canopy-backend/pkg/observability/logger"
 )
 
@@ -16,10 +17,19 @@ type Provider struct {
 }
 
 // Wire creates the synthesis bounded context from infrastructure dependencies.
-func Wire(db *database.DB, wsMembers service.WorkspaceMemberReader, pub events.Publisher, log logger.Logger) *Provider {
+func Wire(
+	db *database.DB,
+	llmResolver llm.ProviderResolver,
+	leaves service.SourceLeafReader,
+	seeds service.SeedReader,
+	leafCreator service.SynthesisLeafCreator,
+	wsMembers service.WorkspaceMemberReader,
+	pub events.Publisher,
+	log logger.Logger,
+) *Provider {
 	dbtx := db.DBTX()
 	repo := postgres.NewSynthesisRepository(dbtx)
-	svc := service.New(repo, wsMembers, pub, log)
+	svc := service.New(repo, llmResolver, leaves, seeds, leafCreator, wsMembers, pub, log)
 	h := handler.NewHandler(svc, log)
 	return &Provider{Service: svc, Handler: h}
 }

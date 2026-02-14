@@ -26,6 +26,7 @@ type Service struct {
 	leaves        domain.LeafRepository
 	branches      domain.BranchRepository
 	connections   domain.ConnectionRepository
+	graph         domain.GraphQueryEngine
 	wsMembers     WorkspaceMemberReader
 	db            *database.DB
 	newLeafRepo   func(database.DBTX) domain.LeafRepository
@@ -39,6 +40,7 @@ func New(
 	leaves domain.LeafRepository,
 	branches domain.BranchRepository,
 	connections domain.ConnectionRepository,
+	graph domain.GraphQueryEngine,
 	wsMembers WorkspaceMemberReader,
 	db *database.DB,
 	newLeafRepo func(database.DBTX) domain.LeafRepository,
@@ -50,6 +52,7 @@ func New(
 		leaves:        leaves,
 		branches:      branches,
 		connections:   connections,
+		graph:         graph,
 		wsMembers:     wsMembers,
 		db:            db,
 		newLeafRepo:   newLeafRepo,
@@ -136,6 +139,7 @@ func (s *Service) StartBranch(
 	ctx context.Context,
 	workspaceID types.WorkspaceID,
 	seedID types.SeedID,
+	parentLeafID types.LeafID,
 	title, summary string,
 	keyPoints, openQuestions, tags []string,
 ) (domain.Branch, domain.Leaf, error) {
@@ -151,7 +155,7 @@ func (s *Service) StartBranch(
 		return domain.Branch{}, domain.Leaf{}, canopyerr.Wrap(err, op)
 	}
 
-	leaf, err := domain.NewLeaf(workspaceID, seedID, branch.ID(), callerID, types.LeafID{}, title, summary, keyPoints, openQuestions, tags)
+	leaf, err := domain.NewLeaf(workspaceID, seedID, branch.ID(), callerID, parentLeafID, title, summary, keyPoints, openQuestions, tags)
 	if err != nil {
 		return domain.Branch{}, domain.Leaf{}, canopyerr.Wrap(err, op)
 	}
@@ -247,6 +251,21 @@ func (s *Service) CreateConnection(ctx context.Context, workspaceID types.Worksp
 	return conn, nil
 }
 
+// FindConnectionsByWorkspace returns all connections in a workspace.
+func (s *Service) FindConnectionsByWorkspace(ctx context.Context, workspaceID types.WorkspaceID) ([]domain.Connection, error) {
+	const op = "exploration: find connections by workspace"
+
+	if _, err := s.requireMember(ctx, workspaceID); err != nil {
+		return nil, canopyerr.Wrap(err, op)
+	}
+
+	conns, err := s.connections.FindByWorkspace(ctx, workspaceID)
+	if err != nil {
+		return nil, canopyerr.Wrap(err, op)
+	}
+	return conns, nil
+}
+
 // FindConnectionsByLeaf returns all connections that include a given leaf.
 func (s *Service) FindConnectionsByLeaf(ctx context.Context, leafID types.LeafID) ([]domain.Connection, error) {
 	const op = "exploration: find connections by leaf"
@@ -278,6 +297,68 @@ func (s *Service) PromoteLeaf(ctx context.Context, leafID types.LeafID) error {
 	})
 
 	return nil
+}
+
+// UpdateLeafPosition updates a leaf's canvas position. Caller must be a workspace member.
+func (s *Service) UpdateLeafPosition(ctx context.Context, leafID types.LeafID, x, y float64) error {
+	const op = "exploration: update leaf position"
+
+	leaf, err := s.leaves.FindByID(ctx, leafID)
+	if err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	if _, err := s.requireMember(ctx, leaf.WorkspaceID()); err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	if err := s.leaves.UpdatePosition(ctx, leafID, x, y); err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	return nil
+}
+
+// --- Graph Queries ---
+
+// GetAncestors returns all ancestor leaves back to the seed root.
+func (s *Service) GetAncestors(ctx context.Context, leafID types.LeafID) ([]domain.Leaf, error) {
+	const op = "exploration: get ancestors"
+	leaves, err := s.graph.Ancestors(ctx, leafID)
+	if err != nil {
+		return nil, canopyerr.Wrap(err, op)
+	}
+	return leaves, nil
+}
+
+// GetDescendants returns all descendant leaves from a given leaf.
+func (s *Service) GetDescendants(ctx context.Context, leafID types.LeafID) ([]domain.Leaf, error) {
+	const op = "exploration: get descendants"
+	leaves, err := s.graph.Descendants(ctx, leafID)
+	if err != nil {
+		return nil, canopyerr.Wrap(err, op)
+	}
+	return leaves, nil
+}
+
+// GetNeighborhood returns all leaves within N connections of a given leaf.
+func (s *Service) GetNeighborhood(ctx context.Context, leafID types.LeafID, depth int) ([]domain.Leaf, error) {
+	const op = "exploration: get neighborhood"
+	leaves, err := s.graph.Neighborhood(ctx, leafID, depth)
+	if err != nil {
+		return nil, canopyerr.Wrap(err, op)
+	}
+	return leaves, nil
+}
+
+// GetSynthesisLineage traces a synthesis leaf back through its source chain.
+func (s *Service) GetSynthesisLineage(ctx context.Context, leafID types.LeafID) ([]domain.Leaf, error) {
+	const op = "exploration: get synthesis lineage"
+	leaves, err := s.graph.SynthesisLineage(ctx, leafID)
+	if err != nil {
+		return nil, canopyerr.Wrap(err, op)
+	}
+	return leaves, nil
 }
 
 // --- Auth Helpers ---

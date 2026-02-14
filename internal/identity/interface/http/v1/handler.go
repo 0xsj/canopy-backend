@@ -24,6 +24,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/users/me", h.handleGetMe)
 	mux.HandleFunc("GET /api/v1/users/{userId}", h.handleGetUser)
 	mux.HandleFunc("PATCH /api/v1/users/me", h.handleUpdateProfile)
+	mux.HandleFunc("PUT /api/v1/users/me/llm-config", h.handleSetLLMConfig)
+	mux.HandleFunc("GET /api/v1/users/me/llm-config", h.handleGetLLMConfig)
+	mux.HandleFunc("DELETE /api/v1/users/me/llm-config", h.handleDeleteLLMConfig)
 }
 
 func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
@@ -97,4 +100,37 @@ func (h *Handler) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	types.WriteOK(w, UserFromDomain(user))
+}
+
+func (h *Handler) handleSetLLMConfig(w http.ResponseWriter, r *http.Request) {
+	var req SetUserLLMConfigRequest
+	if !httpserver.DecodeBody(w, r, &req) {
+		return
+	}
+
+	if err := h.svc.SetLLMConfig(r.Context(), req.Provider, req.Model, req.APIKey); err != nil {
+		httpserver.WriteServiceError(w, h.log, err)
+		return
+	}
+
+	types.WriteOK(w, struct{}{})
+}
+
+func (h *Handler) handleGetLLMConfig(w http.ResponseWriter, r *http.Request) {
+	result, err := h.svc.GetLLMConfig(r.Context())
+	if err != nil {
+		httpserver.WriteServiceError(w, h.log, err)
+		return
+	}
+
+	types.WriteOK(w, UserLLMConfigFromResult(result))
+}
+
+func (h *Handler) handleDeleteLLMConfig(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.DeleteLLMConfig(r.Context()); err != nil {
+		httpserver.WriteServiceError(w, h.log, err)
+		return
+	}
+
+	types.WriteOK(w, struct{}{})
 }

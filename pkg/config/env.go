@@ -75,6 +75,19 @@ func (e EnvReader) Bool(name string, fallback bool) bool {
 	}
 }
 
+// Float64 reads a float64 env var. Returns fallback if not set or unparseable.
+func (e EnvReader) Float64(name string, fallback float64) float64 {
+	val := os.Getenv(e.key(name))
+	if val == "" {
+		return fallback
+	}
+	f, err := strconv.ParseFloat(val, 64)
+	if err != nil {
+		return fallback
+	}
+	return f
+}
+
 // Duration reads a duration env var (e.g., "5s", "100ms").
 // Returns fallback if not set or unparseable.
 func (e EnvReader) Duration(name string, fallback time.Duration) time.Duration {

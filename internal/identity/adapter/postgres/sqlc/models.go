@@ -17,3 +17,12 @@ type User struct {
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
+
+type UserLlmConfig struct {
+	UserID    string
+	Provider  string
+	Model     string
+	ApiKeyEnc []byte
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}

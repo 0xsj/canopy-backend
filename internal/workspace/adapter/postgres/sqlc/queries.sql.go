@@ -75,6 +75,33 @@ func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams
 	return err
 }
 
+const deleteLLMConfig = `-- name: DeleteLLMConfig :execresult
+DELETE FROM llm_configs WHERE workspace_id = $1
+`
+
+func (q *Queries) DeleteLLMConfig(ctx context.Context, workspaceID string) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, deleteLLMConfig, workspaceID)
+}
+
+const findLLMConfigByWorkspace = `-- name: FindLLMConfigByWorkspace :one
+SELECT workspace_id, provider, model, api_key_enc, created_at, updated_at
+FROM llm_configs WHERE workspace_id = $1
+`
+
+func (q *Queries) FindLLMConfigByWorkspace(ctx context.Context, workspaceID string) (LlmConfig, error) {
+	row := q.db.QueryRow(ctx, findLLMConfigByWorkspace, workspaceID)
+	var i LlmConfig
+	err := row.Scan(
+		&i.WorkspaceID,
+		&i.Provider,
+		&i.Model,
+		&i.ApiKeyEnc,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const findWorkspaceByID = `-- name: FindWorkspaceByID :one
 SELECT id, org_id, team_id, name, description, phase, lore_keeper_mode, lore_keeper_id, configuration, created_at, updated_at
 FROM workspaces WHERE id = $1
@@ -319,4 +346,35 @@ type UpdateWorkspaceMemberRoleParams struct {
 
 func (q *Queries) UpdateWorkspaceMemberRole(ctx context.Context, arg UpdateWorkspaceMemberRoleParams) (pgconn.CommandTag, error) {
 	return q.db.Exec(ctx, updateWorkspaceMemberRole, arg.WorkspaceID, arg.UserID, arg.Role)
+}
+
+const upsertLLMConfig = `-- name: UpsertLLMConfig :exec
+
+INSERT INTO llm_configs (workspace_id, provider, model, api_key_enc, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (workspace_id)
+DO UPDATE SET provider = EXCLUDED.provider, model = EXCLUDED.model,
+             api_key_enc = EXCLUDED.api_key_enc, updated_at = EXCLUDED.updated_at
+`
+
+type UpsertLLMConfigParams struct {
+	WorkspaceID string
+	Provider    string
+	Model       string
+	ApiKeyEnc   []byte
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// LLM config queries
+func (q *Queries) UpsertLLMConfig(ctx context.Context, arg UpsertLLMConfigParams) error {
+	_, err := q.db.Exec(ctx, upsertLLMConfig,
+		arg.WorkspaceID,
+		arg.Provider,
+		arg.Model,
+		arg.ApiKeyEnc,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	return err
 }

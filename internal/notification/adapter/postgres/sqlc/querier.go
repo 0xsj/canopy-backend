@@ -12,6 +12,7 @@ import (
 
 type Querier interface {
 	CreateNotification(ctx context.Context, arg CreateNotificationParams) error
+	FindNotificationByID(ctx context.Context, id string) (Notification, error)
 	FindNotificationsByUser(ctx context.Context, arg FindNotificationsByUserParams) ([]Notification, error)
 	FindSubscriptionByUserAndWorkspace(ctx context.Context, arg FindSubscriptionByUserAndWorkspaceParams) (Subscription, error)
 	FindSubscriptionsByWorkspace(ctx context.Context, workspaceID string) ([]Subscription, error)

@@ -20,6 +20,8 @@ type LeafResponse struct {
 	Layer         string          `json:"layer"`
 	Sources       []domain.Source `json:"sources,omitempty"`
 	Metadata      map[string]any  `json:"metadata,omitempty"`
+	PositionX     float64         `json:"position_x"`
+	PositionY     float64         `json:"position_y"`
 	CreatedAt     types.Timestamp `json:"created_at"`
 }
 
@@ -40,6 +42,8 @@ func LeafFromDomain(l domain.Leaf) LeafResponse {
 		Layer:         string(l.Layer()),
 		Sources:       l.Sources(),
 		Metadata:      l.Metadata(),
+		PositionX:     l.PositionX(),
+		PositionY:     l.PositionY(),
 		CreatedAt:     ts.CreatedAt,
 	}
 }

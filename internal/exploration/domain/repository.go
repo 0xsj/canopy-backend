@@ -28,9 +28,13 @@ type LeafRepository interface {
 	FindBySeed(ctx context.Context, seedID types.SeedID) ([]Leaf, error)
 
 	// UpdateLayer changes a leaf's layer (understory → canopy promotion).
-	// This is the only mutation allowed on a leaf, driven by the
+	// This is the only mutation allowed on a leaf's content, driven by the
 	// convergence context through an event.
 	UpdateLayer(ctx context.Context, id types.LeafID, layer Layer) error
+
+	// UpdatePosition sets a leaf's canvas position. This is a presentation
+	// concern and does not affect content immutability.
+	UpdatePosition(ctx context.Context, id types.LeafID, x, y float64) error
 }
 
 // LeafFilter provides optional filtering for workspace leaf queries.

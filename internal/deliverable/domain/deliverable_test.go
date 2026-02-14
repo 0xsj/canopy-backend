@@ -70,6 +70,61 @@ func TestChangeFormat(t *testing.T) {
 	}
 }
 
+func TestFinalize_SetsFlag(t *testing.T) {
+	d, _ := NewDeliverable(types.NewWorkspaceID(), FormatMarkdown, "content", []types.LeafID{types.NewLeafID()})
+
+	if d.Finalized() {
+		t.Fatal("new deliverable should not be finalized")
+	}
+
+	if err := d.Finalize(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !d.Finalized() {
+		t.Error("expected finalized to be true after Finalize()")
+	}
+}
+
+func TestFinalize_RejectsDoubleFinalize(t *testing.T) {
+	d, _ := NewDeliverable(types.NewWorkspaceID(), FormatMarkdown, "content", []types.LeafID{types.NewLeafID()})
+	_ = d.Finalize()
+
+	err := d.Finalize()
+	if err == nil {
+		t.Fatal("expected error for double finalize")
+	}
+}
+
+func TestUpdateContent_RejectsAfterFinalize(t *testing.T) {
+	d, _ := NewDeliverable(types.NewWorkspaceID(), FormatMarkdown, "v1", []types.LeafID{types.NewLeafID()})
+	_ = d.Finalize()
+
+	err := d.UpdateContent("v2")
+	if err == nil {
+		t.Fatal("expected error for editing finalized deliverable")
+	}
+}
+
+func TestChangeFormat_RejectsAfterFinalize(t *testing.T) {
+	d, _ := NewDeliverable(types.NewWorkspaceID(), FormatMarkdown, "content", []types.LeafID{types.NewLeafID()})
+	_ = d.Finalize()
+
+	err := d.ChangeFormat(FormatPDF)
+	if err == nil {
+		t.Fatal("expected error for changing format on finalized deliverable")
+	}
+}
+
+func TestAddSourceLeaf_RejectsAfterFinalize(t *testing.T) {
+	d, _ := NewDeliverable(types.NewWorkspaceID(), FormatMarkdown, "content", []types.LeafID{types.NewLeafID()})
+	_ = d.Finalize()
+
+	err := d.AddSourceLeaf(types.NewLeafID())
+	if err == nil {
+		t.Fatal("expected error for adding source to finalized deliverable")
+	}
+}
+
 func TestAddSourceLeaf_Deduplicates(t *testing.T) {
 	leafID := types.NewLeafID()
 	d, _ := NewDeliverable(types.NewWorkspaceID(), FormatMarkdown, "content", []types.LeafID{leafID})

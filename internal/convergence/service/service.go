@@ -221,6 +221,90 @@ func (s *Service) ResolveCheckpoint(ctx context.Context, checkpointID types.Chec
 	return nil
 }
 
+// RecordConsensusPosition records a participant's position (align/concern/block)
+// on an open checkpoint. Caller must be a workspace member.
+func (s *Service) RecordConsensusPosition(
+	ctx context.Context,
+	checkpointID types.CheckpointID,
+	position domain.Position,
+	explanation string,
+) (domain.Checkpoint, error) {
+	const op = "convergence: record consensus position"
+
+	checkpoint, err := s.checkpoints.FindByID(ctx, checkpointID)
+	if err != nil {
+		return domain.Checkpoint{}, canopyerr.Wrap(err, op)
+	}
+
+	callerID, err := s.requireMember(ctx, checkpoint.WorkspaceID())
+	if err != nil {
+		return domain.Checkpoint{}, canopyerr.Wrap(err, op)
+	}
+
+	signal, err := domain.NewConsensusSignal(checkpointID, callerID, position, explanation)
+	if err != nil {
+		return domain.Checkpoint{}, canopyerr.Wrap(err, op)
+	}
+
+	if err := checkpoint.RecordSignal(signal); err != nil {
+		return domain.Checkpoint{}, canopyerr.Wrap(err, op)
+	}
+
+	if err := s.checkpoints.Update(ctx, checkpoint); err != nil {
+		return domain.Checkpoint{}, canopyerr.Wrap(err, op)
+	}
+
+	s.publish(ctx, domain.SubjectConsensusSignalRecorded, checkpoint.WorkspaceID().String(), domain.ConsensusSignalRecordedData{
+		CheckpointID: checkpointID.String(),
+		WorkspaceID:  checkpoint.WorkspaceID().String(),
+		UserID:       callerID.String(),
+		Position:     string(position),
+		Timestamp:    time.Now().UTC(),
+	})
+
+	s.log.Info("consensus position recorded",
+		logger.String("checkpoint_id", checkpointID.String()),
+		logger.String("user_id", callerID.String()),
+		logger.String("position", string(position)),
+	)
+
+	return checkpoint, nil
+}
+
+// GetCheckpoint returns a checkpoint by ID.
+func (s *Service) GetCheckpoint(ctx context.Context, checkpointID types.CheckpointID) (domain.Checkpoint, error) {
+	const op = "convergence: get checkpoint"
+	checkpoint, err := s.checkpoints.FindByID(ctx, checkpointID)
+	if err != nil {
+		return domain.Checkpoint{}, canopyerr.Wrap(err, op)
+	}
+	return checkpoint, nil
+}
+
+// FindCheckpointsByWorkspace returns checkpoints in a workspace.
+// If openOnly is true, only open checkpoints are returned.
+func (s *Service) FindCheckpointsByWorkspace(ctx context.Context, workspaceID types.WorkspaceID, openOnly bool) ([]domain.Checkpoint, error) {
+	const op = "convergence: find checkpoints by workspace"
+
+	if _, err := s.requireMember(ctx, workspaceID); err != nil {
+		return nil, canopyerr.Wrap(err, op)
+	}
+
+	if openOnly {
+		checkpoints, err := s.checkpoints.FindOpenByWorkspace(ctx, workspaceID)
+		if err != nil {
+			return nil, canopyerr.Wrap(err, op)
+		}
+		return checkpoints, nil
+	}
+
+	checkpoints, err := s.checkpoints.FindByWorkspace(ctx, workspaceID)
+	if err != nil {
+		return nil, canopyerr.Wrap(err, op)
+	}
+	return checkpoints, nil
+}
+
 // --- Auth Helpers ---
 
 func (s *Service) requireMember(ctx context.Context, workspaceID types.WorkspaceID) (types.UserID, error) {

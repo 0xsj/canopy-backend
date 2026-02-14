@@ -11,8 +11,9 @@ import (
 
 // Provider encapsulates seed context wiring.
 type Provider struct {
-	Service *service.Service
-	Handler *handler.Handler
+	Service  *service.Service
+	Handler  *handler.Handler
+	SeedRepo *postgres.SeedRepository // exposed: context assembler needs seed data
 }
 
 // Wire creates the seed bounded context from infrastructure dependencies.
@@ -21,5 +22,5 @@ func Wire(db *database.DB, wsMembers service.WorkspaceMemberReader, pub events.P
 	repo := postgres.NewSeedRepository(dbtx)
 	svc := service.New(repo, wsMembers, pub, log)
 	h := handler.NewHandler(svc, log)
-	return &Provider{Service: svc, Handler: h}
+	return &Provider{Service: svc, Handler: h, SeedRepo: repo}
 }

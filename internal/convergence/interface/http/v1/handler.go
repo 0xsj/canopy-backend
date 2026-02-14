@@ -26,6 +26,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/leaves/{leafId}/signals/counts", h.handleGetSignalCounts)
 	mux.HandleFunc("GET /api/v1/workspaces/{wsId}/signals/mine", h.handleFindUserSignals)
 	mux.HandleFunc("POST /api/v1/workspaces/{wsId}/checkpoints", h.handleCreateCheckpoint)
+	mux.HandleFunc("GET /api/v1/workspaces/{wsId}/checkpoints", h.handleListCheckpoints)
+	mux.HandleFunc("GET /api/v1/checkpoints/{checkpointId}", h.handleGetCheckpoint)
+	mux.HandleFunc("POST /api/v1/checkpoints/{checkpointId}/signals", h.handleRecordConsensusPosition)
 	mux.HandleFunc("POST /api/v1/checkpoints/{checkpointId}/resolve", h.handleResolveCheckpoint)
 }
 
@@ -140,6 +143,66 @@ func (h *Handler) handleCreateCheckpoint(w http.ResponseWriter, r *http.Request)
 	}
 
 	types.WriteCreated(w, CheckpointFromDomain(checkpoint))
+}
+
+func (h *Handler) handleGetCheckpoint(w http.ResponseWriter, r *http.Request) {
+	checkpointID, err := types.ParseCheckpointID(httpserver.PathParam(r, "checkpointId"))
+	if err != nil {
+		types.WriteError(w, http.StatusBadRequest, "invalid_id", err.Error())
+		return
+	}
+
+	checkpoint, err := h.svc.GetCheckpoint(r.Context(), checkpointID)
+	if err != nil {
+		httpserver.WriteServiceError(w, h.log, err)
+		return
+	}
+
+	types.WriteOK(w, CheckpointFromDomain(checkpoint))
+}
+
+func (h *Handler) handleListCheckpoints(w http.ResponseWriter, r *http.Request) {
+	wsID, err := types.ParseWorkspaceID(httpserver.PathParam(r, "wsId"))
+	if err != nil {
+		types.WriteError(w, http.StatusBadRequest, "invalid_id", err.Error())
+		return
+	}
+
+	openOnly := r.URL.Query().Get("status") == "open"
+
+	checkpoints, err := h.svc.FindCheckpointsByWorkspace(r.Context(), wsID, openOnly)
+	if err != nil {
+		httpserver.WriteServiceError(w, h.log, err)
+		return
+	}
+
+	out := make([]CheckpointResponse, len(checkpoints))
+	for i, c := range checkpoints {
+		out[i] = CheckpointFromDomain(c)
+	}
+
+	types.WriteOK(w, out)
+}
+
+func (h *Handler) handleRecordConsensusPosition(w http.ResponseWriter, r *http.Request) {
+	checkpointID, err := types.ParseCheckpointID(httpserver.PathParam(r, "checkpointId"))
+	if err != nil {
+		types.WriteError(w, http.StatusBadRequest, "invalid_id", err.Error())
+		return
+	}
+
+	var req RecordConsensusPositionRequest
+	if !httpserver.DecodeBody(w, r, &req) {
+		return
+	}
+
+	checkpoint, err := h.svc.RecordConsensusPosition(r.Context(), checkpointID, domain.Position(req.Position), req.Explanation)
+	if err != nil {
+		httpserver.WriteServiceError(w, h.log, err)
+		return
+	}
+
+	types.WriteOK(w, CheckpointFromDomain(checkpoint))
 }
 
 func (h *Handler) handleResolveCheckpoint(w http.ResponseWriter, r *http.Request) {

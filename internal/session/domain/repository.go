@@ -14,6 +14,9 @@ type SessionRepository interface {
 	// FindByID returns a session by ID.
 	FindByID(ctx context.Context, id types.ID[sessionTag]) (Session, error)
 
+	// FindByWorkspace returns all sessions in a workspace, ordered by most recent first.
+	FindByWorkspace(ctx context.Context, workspaceID types.WorkspaceID) ([]Session, error)
+
 	// FindActiveByUser returns all active (non-terminal) sessions for a user
 	// in a workspace.
 	FindActiveByUser(ctx context.Context, workspaceID types.WorkspaceID, userID types.UserID) ([]Session, error)

@@ -13,6 +13,7 @@ type CreateLeafRequest struct {
 
 type StartBranchRequest struct {
 	SeedID        string   `json:"seed_id"`
+	ParentLeafID  string   `json:"parent_leaf_id,omitempty"`
 	Title         string   `json:"title"`
 	Summary       string   `json:"summary"`
 	KeyPoints     []string `json:"key_points,omitempty"`
@@ -22,4 +23,9 @@ type StartBranchRequest struct {
 
 type CreateConnectionRequest struct {
 	LeafIDs []string `json:"leaf_ids"`
+}
+
+type UpdateLeafPositionRequest struct {
+	PositionX float64 `json:"position_x"`
+	PositionY float64 `json:"position_y"`
 }

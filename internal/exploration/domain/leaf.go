@@ -49,6 +49,8 @@ type Leaf struct {
 	layer         Layer
 	sources       []Source // non-nil only for synthesis leaves
 	metadata      map[string]any
+	positionX     float64
+	positionY     float64
 	timestamps    types.Timestamps // immutable — created_at only
 }
 
@@ -86,9 +88,6 @@ func NewLeaf(
 	}
 
 	summary = strings.TrimSpace(summary)
-	if summary == "" {
-		return Leaf{}, fmt.Errorf("exploration: leaf summary is required")
-	}
 
 	return Leaf{
 		id:            types.NewLeafID(),
@@ -151,6 +150,7 @@ func ReconstructLeaf(
 	layer Layer,
 	sources []Source,
 	metadata map[string]any,
+	positionX, positionY float64,
 	timestamps types.Timestamps,
 ) Leaf {
 	if metadata == nil {
@@ -171,6 +171,8 @@ func ReconstructLeaf(
 		layer:         layer,
 		sources:       sources,
 		metadata:      metadata,
+		positionX:     positionX,
+		positionY:     positionY,
 		timestamps:    timestamps,
 	}
 }
@@ -195,4 +197,12 @@ func (l Leaf) Tags() []string                 { return l.tags }
 func (l Leaf) Layer() Layer                   { return l.layer }
 func (l Leaf) Sources() []Source              { return l.sources }
 func (l Leaf) Metadata() map[string]any       { return l.metadata }
+func (l Leaf) PositionX() float64             { return l.positionX }
+func (l Leaf) PositionY() float64             { return l.positionY }
 func (l Leaf) Timestamps() types.Timestamps   { return l.timestamps }
+
+// UpdatePosition sets the leaf's canvas position.
+func (l *Leaf) UpdatePosition(x, y float64) {
+	l.positionX = x
+	l.positionY = y
+}

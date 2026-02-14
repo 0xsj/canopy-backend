@@ -21,11 +21,19 @@ type OrgMemberReader interface {
 	FindMember(ctx context.Context, orgID types.OrgID, userID types.UserID) (orgdomain.OrgMember, error)
 }
 
+// Encryptor provides symmetric encryption for sensitive data (API keys).
+type Encryptor interface {
+	Encrypt(plaintext []byte) ([]byte, error)
+	Decrypt(ciphertext []byte) ([]byte, error)
+}
+
 // Service implements the workspace application logic.
 type Service struct {
 	workspaces domain.WorkspaceRepository
 	members    domain.WorkspaceMemberRepository
+	llmConfigs domain.LLMConfigRepository
 	orgMembers OrgMemberReader
+	encryptor  Encryptor
 	db         *database.DB
 	newWsRepo  func(database.DBTX) domain.WorkspaceRepository
 	newMemRepo func(database.DBTX) domain.WorkspaceMemberRepository
@@ -37,7 +45,9 @@ type Service struct {
 func New(
 	workspaces domain.WorkspaceRepository,
 	members domain.WorkspaceMemberRepository,
+	llmConfigs domain.LLMConfigRepository,
 	orgMembers OrgMemberReader,
+	encryptor Encryptor,
 	db *database.DB,
 	newWsRepo func(database.DBTX) domain.WorkspaceRepository,
 	newMemRepo func(database.DBTX) domain.WorkspaceMemberRepository,
@@ -47,7 +57,9 @@ func New(
 	return &Service{
 		workspaces: workspaces,
 		members:    members,
+		llmConfigs: llmConfigs,
 		orgMembers: orgMembers,
+		encryptor:  encryptor,
 		db:         db,
 		newWsRepo:  newWsRepo,
 		newMemRepo: newMemRepo,
@@ -191,6 +203,83 @@ func (s *Service) LeaveWorkspace(ctx context.Context, workspaceID types.Workspac
 	return nil
 }
 
+// ListMembers returns all workspace members. Caller must be a member.
+func (s *Service) ListMembers(ctx context.Context, workspaceID types.WorkspaceID) ([]domain.WorkspaceMember, error) {
+	const op = "workspace: list members"
+
+	if _, err := s.RequireMember(ctx, workspaceID); err != nil {
+		return nil, canopyerr.Wrap(err, op)
+	}
+
+	members, err := s.members.FindByWorkspace(ctx, workspaceID)
+	if err != nil {
+		return nil, canopyerr.Wrap(err, op)
+	}
+
+	return members, nil
+}
+
+// AddMember adds a user to the workspace. Caller must be lore keeper.
+func (s *Service) AddMember(ctx context.Context, workspaceID types.WorkspaceID, userID types.UserID) error {
+	const op = "workspace: add member"
+
+	if err := s.requireLoreKeeper(ctx, workspaceID); err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	ws, err := s.workspaces.FindByID(ctx, workspaceID)
+	if err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	// Verify the target user is an org member.
+	if _, err := s.orgMembers.FindMember(ctx, ws.OrgID(), userID); err != nil {
+		if canopyerr.GetKind(err) == canopyerr.KindNotFound {
+			return canopyerr.Wrap(canopyerr.ErrUnauthorized, op)
+		}
+		return canopyerr.Wrap(err, op)
+	}
+
+	member, err := domain.NewWorkspaceMember(workspaceID, userID, domain.RoleParticipant)
+	if err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	if err := s.members.Add(ctx, member); err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	s.publish(ctx, domain.SubjectMemberJoined, workspaceID.String(), domain.MemberJoinedData{
+		WorkspaceID: workspaceID.String(),
+		UserID:      userID.String(),
+		Role:        string(domain.RoleParticipant),
+		Timestamp:   time.Now().UTC(),
+	})
+
+	return nil
+}
+
+// RemoveMember removes a user from the workspace. Caller must be lore keeper.
+func (s *Service) RemoveMember(ctx context.Context, workspaceID types.WorkspaceID, userID types.UserID) error {
+	const op = "workspace: remove member"
+
+	if err := s.requireLoreKeeper(ctx, workspaceID); err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	if err := s.members.Remove(ctx, workspaceID, userID); err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	s.publish(ctx, domain.SubjectMemberLeft, workspaceID.String(), domain.MemberLeftData{
+		WorkspaceID: workspaceID.String(),
+		UserID:      userID.String(),
+		Timestamp:   time.Now().UTC(),
+	})
+
+	return nil
+}
+
 // UpdateRole changes a workspace member's role. Caller must be lore keeper.
 func (s *Service) UpdateRole(ctx context.Context, workspaceID types.WorkspaceID, userID types.UserID, newRole domain.WorkspaceRole) error {
 	const op = "workspace: update role"
@@ -213,6 +302,61 @@ func (s *Service) UpdateRole(ctx context.Context, workspaceID types.WorkspaceID,
 	}
 
 	return nil
+}
+
+// UpdateDetails updates the workspace name and description. Caller must be lore keeper.
+func (s *Service) UpdateDetails(ctx context.Context, workspaceID types.WorkspaceID, name, description string) (domain.Workspace, error) {
+	const op = "workspace: update details"
+
+	if err := s.requireLoreKeeper(ctx, workspaceID); err != nil {
+		return domain.Workspace{}, canopyerr.Wrap(err, op)
+	}
+
+	ws, err := s.workspaces.FindByID(ctx, workspaceID)
+	if err != nil {
+		return domain.Workspace{}, canopyerr.Wrap(err, op)
+	}
+
+	if err := ws.UpdateDetails(name, description); err != nil {
+		return domain.Workspace{}, canopyerr.Wrap(err, op)
+	}
+
+	if err := s.workspaces.Update(ctx, ws); err != nil {
+		return domain.Workspace{}, canopyerr.Wrap(err, op)
+	}
+
+	s.log.Info("workspace details updated",
+		logger.String("workspace_id", workspaceID.String()),
+		logger.String("name", name),
+	)
+
+	return ws, nil
+}
+
+// UpdateConfiguration updates the workspace's configuration map. Caller must be lore keeper.
+func (s *Service) UpdateConfiguration(ctx context.Context, workspaceID types.WorkspaceID, config map[string]any) (domain.Workspace, error) {
+	const op = "workspace: update configuration"
+
+	if err := s.requireLoreKeeper(ctx, workspaceID); err != nil {
+		return domain.Workspace{}, canopyerr.Wrap(err, op)
+	}
+
+	ws, err := s.workspaces.FindByID(ctx, workspaceID)
+	if err != nil {
+		return domain.Workspace{}, canopyerr.Wrap(err, op)
+	}
+
+	ws.UpdateConfiguration(config)
+
+	if err := s.workspaces.Update(ctx, ws); err != nil {
+		return domain.Workspace{}, canopyerr.Wrap(err, op)
+	}
+
+	s.log.Info("workspace configuration updated",
+		logger.String("workspace_id", workspaceID.String()),
+	)
+
+	return ws, nil
 }
 
 // UpdateConfig updates the workspace configuration. Caller must be lore keeper.
@@ -274,6 +418,109 @@ func (s *Service) TransitionPhase(ctx context.Context, workspaceID types.Workspa
 		NewPhase:      string(target),
 		Timestamp:     time.Now().UTC(),
 	})
+
+	return nil
+}
+
+// --- LLM Config ---
+
+// SetLLMConfig sets or updates the LLM configuration for a workspace.
+// Caller must be lore keeper. The API key is encrypted before storage.
+func (s *Service) SetLLMConfig(ctx context.Context, wsID types.WorkspaceID, provider, model, apiKey string) error {
+	const op = "workspace: set llm config"
+
+	if err := s.requireLoreKeeper(ctx, wsID); err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	enc, err := s.encryptor.Encrypt([]byte(apiKey))
+	if err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	cfg, err := domain.NewLLMConfig(wsID, provider, model, enc)
+	if err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	if err := s.llmConfigs.Upsert(ctx, cfg); err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	s.publish(ctx, domain.SubjectLLMConfigUpdated, wsID.String(), domain.LLMConfigUpdatedData{
+		WorkspaceID: wsID.String(),
+		Provider:    provider,
+		Model:       model,
+		Timestamp:   time.Now().UTC(),
+	})
+
+	s.log.Info("workspace llm config updated",
+		logger.String("workspace_id", wsID.String()),
+		logger.String("provider", provider),
+		logger.String("model", model),
+	)
+
+	return nil
+}
+
+// LLMConfigResult holds a decrypted LLM config for the handler to render.
+type LLMConfigResult struct {
+	WorkspaceID types.WorkspaceID
+	Provider    string
+	Model       string
+	APIKey      string // decrypted, masked by the handler
+	Timestamps  types.Timestamps
+}
+
+// GetLLMConfig returns the LLM configuration for a workspace.
+// Caller must be a workspace member. The API key is decrypted for the response.
+func (s *Service) GetLLMConfig(ctx context.Context, wsID types.WorkspaceID) (LLMConfigResult, error) {
+	const op = "workspace: get llm config"
+
+	if _, err := s.RequireMember(ctx, wsID); err != nil {
+		return LLMConfigResult{}, canopyerr.Wrap(err, op)
+	}
+
+	cfg, err := s.llmConfigs.FindByWorkspace(ctx, wsID)
+	if err != nil {
+		return LLMConfigResult{}, canopyerr.Wrap(err, op)
+	}
+
+	plainKey, err := s.encryptor.Decrypt(cfg.APIKeyEnc())
+	if err != nil {
+		return LLMConfigResult{}, canopyerr.Wrap(err, op)
+	}
+
+	return LLMConfigResult{
+		WorkspaceID: cfg.WorkspaceID(),
+		Provider:    string(cfg.Provider()),
+		Model:       cfg.Model(),
+		APIKey:      string(plainKey),
+		Timestamps:  cfg.Timestamps(),
+	}, nil
+}
+
+// DeleteLLMConfig removes the LLM configuration for a workspace.
+// Caller must be lore keeper.
+func (s *Service) DeleteLLMConfig(ctx context.Context, wsID types.WorkspaceID) error {
+	const op = "workspace: delete llm config"
+
+	if err := s.requireLoreKeeper(ctx, wsID); err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	if err := s.llmConfigs.Delete(ctx, wsID); err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	s.publish(ctx, domain.SubjectLLMConfigDeleted, wsID.String(), domain.LLMConfigDeletedData{
+		WorkspaceID: wsID.String(),
+		Timestamp:   time.Now().UTC(),
+	})
+
+	s.log.Info("workspace llm config deleted",
+		logger.String("workspace_id", wsID.String()),
+	)
 
 	return nil
 }

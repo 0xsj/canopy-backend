@@ -2,6 +2,10 @@
 INSERT INTO notifications (id, user_id, channel, title, body, resource_type, resource_id, workspace_id, status, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);
 
+-- name: FindNotificationByID :one
+SELECT id, user_id, channel, title, body, resource_type, resource_id, workspace_id, status, created_at, updated_at
+FROM notifications WHERE id = $1;
+
 -- name: FindNotificationsByUser :many
 SELECT id, user_id, channel, title, body, resource_type, resource_id, workspace_id, status, created_at, updated_at
 FROM notifications WHERE user_id = $1

@@ -40,6 +40,14 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) error {
 	return err
 }
 
+const deleteUserLLMConfig = `-- name: DeleteUserLLMConfig :execresult
+DELETE FROM user_llm_configs WHERE user_id = $1
+`
+
+func (q *Queries) DeleteUserLLMConfig(ctx context.Context, userID string) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, deleteUserLLMConfig, userID)
+}
+
 const findUserByExternalID = `-- name: FindUserByExternalID :one
 SELECT id, external_id, display_name, email, avatar_url, created_at, updated_at
 FROM users WHERE external_id = $1
@@ -74,6 +82,25 @@ func (q *Queries) FindUserByID(ctx context.Context, id string) (User, error) {
 		&i.DisplayName,
 		&i.Email,
 		&i.AvatarUrl,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const findUserLLMConfigByUser = `-- name: FindUserLLMConfigByUser :one
+SELECT user_id, provider, model, api_key_enc, created_at, updated_at
+FROM user_llm_configs WHERE user_id = $1
+`
+
+func (q *Queries) FindUserLLMConfigByUser(ctx context.Context, userID string) (UserLlmConfig, error) {
+	row := q.db.QueryRow(ctx, findUserLLMConfigByUser, userID)
+	var i UserLlmConfig
+	err := row.Scan(
+		&i.UserID,
+		&i.Provider,
+		&i.Model,
+		&i.ApiKeyEnc,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -135,4 +162,33 @@ func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (pgconn.
 		arg.AvatarUrl,
 		arg.UpdatedAt,
 	)
+}
+
+const upsertUserLLMConfig = `-- name: UpsertUserLLMConfig :exec
+INSERT INTO user_llm_configs (user_id, provider, model, api_key_enc, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (user_id) DO UPDATE
+SET provider = EXCLUDED.provider, model = EXCLUDED.model,
+    api_key_enc = EXCLUDED.api_key_enc, updated_at = EXCLUDED.updated_at
+`
+
+type UpsertUserLLMConfigParams struct {
+	UserID    string
+	Provider  string
+	Model     string
+	ApiKeyEnc []byte
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+func (q *Queries) UpsertUserLLMConfig(ctx context.Context, arg UpsertUserLLMConfigParams) error {
+	_, err := q.db.Exec(ctx, upsertUserLLMConfig,
+		arg.UserID,
+		arg.Provider,
+		arg.Model,
+		arg.ApiKeyEnc,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	return err
 }

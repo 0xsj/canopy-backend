@@ -20,10 +20,44 @@ func NewHandler(svc *service.Service, log logger.Logger) *Handler {
 }
 
 func (h *Handler) Register(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v1/sessions/{sessionId}", h.handleGetSession)
+	mux.HandleFunc("GET /api/v1/workspaces/{wsId}/sessions", h.handleListSessions)
 	mux.HandleFunc("POST /api/v1/workspaces/{wsId}/sessions", h.handleStartSession)
 	mux.HandleFunc("POST /api/v1/sessions/{sessionId}/messages", h.handleAddMessage)
 	mux.HandleFunc("POST /api/v1/sessions/{sessionId}/checkpoint", h.handleCheckpoint)
 	mux.HandleFunc("POST /api/v1/sessions/{sessionId}/complete", h.handleComplete)
+}
+
+func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
+	sessionID, err := domain.ParseSessionID(httpserver.PathParam(r, "sessionId"))
+	if err != nil {
+		types.WriteError(w, http.StatusBadRequest, "invalid_id", err.Error())
+		return
+	}
+
+	session, err := h.svc.GetSession(r.Context(), sessionID)
+	if err != nil {
+		httpserver.WriteServiceError(w, h.log, err)
+		return
+	}
+
+	types.WriteOK(w, SessionFromDomain(session))
+}
+
+func (h *Handler) handleListSessions(w http.ResponseWriter, r *http.Request) {
+	wsID, err := types.ParseWorkspaceID(httpserver.PathParam(r, "wsId"))
+	if err != nil {
+		types.WriteError(w, http.StatusBadRequest, "invalid_id", err.Error())
+		return
+	}
+
+	sessions, err := h.svc.ListSessions(r.Context(), wsID)
+	if err != nil {
+		httpserver.WriteServiceError(w, h.log, err)
+		return
+	}
+
+	types.WriteOK(w, SessionsFromDomain(sessions))
 }
 
 func (h *Handler) handleStartSession(w http.ResponseWriter, r *http.Request) {
@@ -53,7 +87,17 @@ func (h *Handler) handleStartSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	session, err := h.svc.StartSession(r.Context(), wsID, seedID, parentLeafID, domain.SessionType(req.SessionType))
+	var sourceLeafIDs []types.LeafID
+	for _, raw := range req.SourceLeafIDs {
+		id, parseErr := types.ParseLeafID(raw)
+		if parseErr != nil {
+			types.WriteError(w, http.StatusBadRequest, "invalid_id", parseErr.Error())
+			return
+		}
+		sourceLeafIDs = append(sourceLeafIDs, id)
+	}
+
+	session, err := h.svc.StartSession(r.Context(), wsID, seedID, parentLeafID, sourceLeafIDs, domain.SessionType(req.SessionType))
 	if err != nil {
 		httpserver.WriteServiceError(w, h.log, err)
 		return

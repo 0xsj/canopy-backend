@@ -20,4 +20,7 @@ type SeedRepository interface {
 
 	// Update persists changes to an existing seed (constraints, tags).
 	Update(ctx context.Context, seed Seed) error
+
+	// UpdatePosition persists a position change for a seed on the canvas.
+	UpdatePosition(ctx context.Context, id types.SeedID, x, y float64) error
 }

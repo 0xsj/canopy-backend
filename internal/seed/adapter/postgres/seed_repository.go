@@ -72,3 +72,19 @@ func (r *SeedRepository) Update(ctx context.Context, seed domain.Seed) error {
 	}
 	return nil
 }
+
+func (r *SeedRepository) UpdatePosition(ctx context.Context, id types.SeedID, x, y float64) error {
+	const op = "seed: update seed position"
+	tag, err := r.q.UpdateSeedPosition(ctx, sqlc.UpdateSeedPositionParams{
+		ID:        id.String(),
+		PositionX: x,
+		PositionY: y,
+	})
+	if err != nil {
+		return database.MapQueryError(err, op)
+	}
+	if tag.RowsAffected() == 0 {
+		return canopyerr.Wrap(canopyerr.ErrNotFound, op)
+	}
+	return nil
+}

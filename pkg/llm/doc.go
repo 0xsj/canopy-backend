@@ -1,54 +1,34 @@
 // Package llm defines the port and adapters for LLM provider integration.
 //
-// This package is a placeholder — implementation comes when the session,
-// synthesis, or notification bounded contexts are built (they are the consumers).
-//
-// # Purpose
-//
 // Every AI interaction in Canopy flows through a single LLM provider port.
 // The port abstracts provider-specific details so that domain logic never
 // couples to a particular vendor's API. Adapters translate between the
 // domain's generic request format and each provider's wire protocol.
 //
-// # Port (the interface)
+// # Port
 //
-// The provider port defines three operations:
+// The Provider interface defines a single ChatCompletion operation that
+// accepts a message history and returns a model response. Used by the
+// session context for the two-phase leaf creation flow (exploration, shaping).
+// StructuredOutput and Synthesis are future additions — they are prompt
+// engineering on top of ChatCompletion, not separate API calls.
 //
-//   - ChatCompletion — the core prompting interaction. Accepts a message
-//     history and returns a model response. Used by the session context
-//     for the two-phase leaf creation flow (exploration → shaping).
+// # Adapters
 //
-//   - StructuredOutput — produces a typed leaf structure from conversation
-//     context. The model response is parsed into the leaf schema (title,
-//     summary, key points, open questions, tags). Used at session confirmation.
+//   - Anthropic — Claude models via the Anthropic Messages API
+//   - OpenAI — GPT/o-series models via the Chat Completions API
+//   - Gemini — Google models via the Generative AI API
 //
-//   - Synthesis — combines multiple leaf structures into a new one with
-//     source attribution. Used by the synthesis context when a user selects
-//     leaves to merge.
+// Each adapter handles: API formatting, system message extraction (Anthropic
+// and Gemini use a separate system param), error normalization, and usage
+// tracking. Adapters hold the API key from config; the model can be
+// overridden per-request via ChatRequest.Model.
 //
-// Each operation accepts a provider configuration containing the model
-// identifier, API key, and provider-specific parameters. This is what
-// enables BYOK (bring your own key).
+// # Factory
 //
-// # Adapters (planned)
-//
-//   - Anthropic — Claude models via the Anthropic API
-//   - OpenAI — GPT models via the OpenAI API
-//   - Others as demand requires
-//
-// Each adapter handles: API formatting, token counting, rate limiting,
-// error normalization, and streaming (if supported). Adapters are stateless
-// — provider configuration is passed per-call, not stored in the adapter.
-//
-// # Platform-Provided vs BYOK
-//
-// Users without their own API key use the platform-provided LLM, which
-// routes through a default adapter configuration using Canopy's own keys.
-// Usage is metered and rate-limited.
-//
-// BYOK users provide their own API key and preferred model. The system
-// routes their sessions through the corresponding adapter. Keys are
-// encrypted at rest, never logged, and never included in domain events.
+// NewProvider(ctx, cfg, log) routes to the correct adapter based on
+// cfg.Provider ("anthropic", "openai", or "gemini"). Only one provider
+// is active at a time.
 //
 // # Context Assembly
 //
@@ -57,39 +37,20 @@
 // varies by session type (exploration, shaping, synthesis, digest).
 // This package only handles the LLM call itself.
 //
-// # Consumers
-//
-//   - internal/session — exploration and shaping prompting flows
-//   - internal/synthesis — multi-leaf synthesis workflow
-//   - internal/notification — AI-generated digest summaries
-//
-// # Design Sketch
-//
-//	type Provider interface {
-//	    ChatCompletion(ctx context.Context, req ChatRequest) (ChatResponse, error)
-//	    StructuredOutput(ctx context.Context, req StructuredRequest) (StructuredResponse, error)
-//	    Synthesis(ctx context.Context, req SynthesisRequest) (SynthesisResponse, error)
-//	}
-//
-//	type ChatRequest struct {
-//	    Model    string
-//	    APIKey   string
-//	    Messages []Message
-//	    Options  Options  // temperature, max tokens, etc.
-//	}
-//
-//	type Message struct {
-//	    Role    string // "system", "user", "assistant"
-//	    Content string
-//	}
-//
 // # Config
 //
 // Follows the standard config.Section pattern:
 //
-//	CANOPY_LLM_DEFAULT_PROVIDER  — "anthropic" or "openai"
-//	CANOPY_LLM_DEFAULT_MODEL     — e.g. "claude-sonnet-4-5-20250929"
-//	CANOPY_LLM_ANTHROPIC_API_KEY — platform key for Anthropic
-//	CANOPY_LLM_OPENAI_API_KEY    — platform key for OpenAI
-//	CANOPY_LLM_REQUEST_TIMEOUT   — per-call timeout (default "60s")
+//	CANOPY_LLM_PROVIDER        — "anthropic", "openai", or "gemini"
+//	CANOPY_LLM_MODEL           — e.g. "claude-sonnet-4-5-20250929"
+//	CANOPY_LLM_API_KEY         — API key for the selected provider
+//	CANOPY_LLM_REQUEST_TIMEOUT — per-call timeout (default "60s")
+//	CANOPY_LLM_TEMPERATURE     — default temperature (default 0.7)
+//	CANOPY_LLM_MAX_TOKENS      — default max tokens (default 4096)
+//
+// # Consumers
+//
+//   - internal/session — exploration and shaping prompting flows
+//   - internal/synthesis — multi-leaf synthesis workflow (future)
+//   - internal/notification — AI-generated digest summaries (future)
 package llm

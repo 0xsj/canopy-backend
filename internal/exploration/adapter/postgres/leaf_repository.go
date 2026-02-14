@@ -110,3 +110,19 @@ func (r *LeafRepository) UpdateLayer(ctx context.Context, id types.LeafID, layer
 	}
 	return nil
 }
+
+func (r *LeafRepository) UpdatePosition(ctx context.Context, id types.LeafID, x, y float64) error {
+	const op = "exploration: update leaf position"
+	tag, err := r.q.UpdateLeafPosition(ctx, sqlc.UpdateLeafPositionParams{
+		ID:        id.String(),
+		PositionX: x,
+		PositionY: y,
+	})
+	if err != nil {
+		return database.MapQueryError(err, op)
+	}
+	if tag.RowsAffected() == 0 {
+		return canopyerr.Wrap(canopyerr.ErrNotFound, op)
+	}
+	return nil
+}

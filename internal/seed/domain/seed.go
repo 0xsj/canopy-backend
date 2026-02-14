@@ -19,6 +19,8 @@ type Seed struct {
 	description string
 	constraints map[string]any
 	tags        []string
+	positionX   float64
+	positionY   float64
 	timestamps  types.Timestamps
 }
 
@@ -57,6 +59,7 @@ func ReconstructSeed(
 	description string,
 	constraints map[string]any,
 	tags []string,
+	positionX, positionY float64,
 	timestamps types.Timestamps,
 ) Seed {
 	if constraints == nil {
@@ -70,8 +73,17 @@ func ReconstructSeed(
 		description: description,
 		constraints: constraints,
 		tags:        tags,
+		positionX:   positionX,
+		positionY:   positionY,
 		timestamps:  timestamps,
 	}
+}
+
+// UpdatePosition sets the seed's canvas position.
+func (s *Seed) UpdatePosition(x, y float64) {
+	s.positionX = x
+	s.positionY = y
+	s.timestamps.Touch()
 }
 
 // UpdateConstraints replaces the seed's constraints. Only the lore keeper
@@ -97,4 +109,6 @@ func (s Seed) Title() string                  { return s.title }
 func (s Seed) Description() string            { return s.description }
 func (s Seed) Constraints() map[string]any    { return s.constraints }
 func (s Seed) Tags() []string                 { return s.tags }
+func (s Seed) PositionX() float64             { return s.positionX }
+func (s Seed) PositionY() float64             { return s.positionY }
 func (s Seed) Timestamps() types.Timestamps   { return s.timestamps }

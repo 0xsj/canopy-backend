@@ -20,6 +20,7 @@ func deliverableToCreateParams(del domain.Deliverable) sqlc.CreateDeliverablePar
 		Version:       int32(del.Version()),
 		CreatedAt:     ts.CreatedAt.Time(),
 		UpdatedAt:     database.TsUpdatedAt(ts),
+		Finalized:     del.Finalized(),
 	}
 }
 
@@ -32,6 +33,7 @@ func deliverableToUpdateParams(del domain.Deliverable) sqlc.UpdateDeliverablePar
 		SourceLeafIds: database.StringsFromIDs(del.SourceLeafIDs()),
 		Version:       int32(del.Version()),
 		UpdatedAt:     database.TsUpdatedAt(ts),
+		Finalized:     del.Finalized(),
 	}
 }
 
@@ -50,6 +52,7 @@ func deliverableToDomain(row sqlc.Deliverable) domain.Deliverable {
 		row.Content,
 		sourceLeafIDs,
 		int(row.Version),
+		row.Finalized,
 		types.Timestamps{
 			CreatedAt: types.TimestampFrom(row.CreatedAt),
 			UpdatedAt: &updatedTS,

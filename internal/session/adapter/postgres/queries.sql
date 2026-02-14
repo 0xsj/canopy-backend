@@ -1,18 +1,25 @@
 -- name: CreateSession :exec
 INSERT INTO sessions (id, workspace_id, user_id, seed_id, parent_leaf_id,
-    session_type, status, messages, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
+    session_type, status, messages, created_at, updated_at, source_leaf_ids)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);
 
 -- name: FindSessionByID :one
 SELECT id, workspace_id, user_id, seed_id, parent_leaf_id,
-    session_type, status, messages, created_at, updated_at
+    session_type, status, messages, created_at, updated_at, source_leaf_ids
 FROM sessions WHERE id = $1;
 
 -- name: FindActiveSessionsByUser :many
 SELECT id, workspace_id, user_id, seed_id, parent_leaf_id,
-    session_type, status, messages, created_at, updated_at
+    session_type, status, messages, created_at, updated_at, source_leaf_ids
 FROM sessions
 WHERE workspace_id = $1 AND user_id = $2 AND status NOT IN ('completed', 'abandoned')
+ORDER BY created_at DESC;
+
+-- name: FindSessionsByWorkspace :many
+SELECT id, workspace_id, user_id, seed_id, parent_leaf_id,
+    session_type, status, messages, created_at, updated_at, source_leaf_ids
+FROM sessions
+WHERE workspace_id = $1
 ORDER BY created_at DESC;
 
 -- name: UpdateSession :execresult

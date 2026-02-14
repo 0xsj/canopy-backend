@@ -23,6 +23,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/seeds/{seedId}", h.handleGetSeed)
 	mux.HandleFunc("GET /api/v1/workspaces/{wsId}/seeds", h.handleListByWorkspace)
 	mux.HandleFunc("PATCH /api/v1/seeds/{seedId}/constraints", h.handleUpdateConstraints)
+	mux.HandleFunc("PATCH /api/v1/seeds/{seedId}/position", h.handleUpdatePosition)
 }
 
 func (h *Handler) handlePlant(w http.ResponseWriter, r *http.Request) {
@@ -76,6 +77,26 @@ func (h *Handler) handleListByWorkspace(w http.ResponseWriter, r *http.Request) 
 	}
 
 	types.WriteOK(w, SeedsFromDomain(seeds))
+}
+
+func (h *Handler) handleUpdatePosition(w http.ResponseWriter, r *http.Request) {
+	seedID, err := types.ParseSeedID(httpserver.PathParam(r, "seedId"))
+	if err != nil {
+		types.WriteError(w, http.StatusBadRequest, "invalid_id", err.Error())
+		return
+	}
+
+	var req UpdatePositionRequest
+	if !httpserver.DecodeBody(w, r, &req) {
+		return
+	}
+
+	if err := h.svc.UpdatePosition(r.Context(), seedID, req.PositionX, req.PositionY); err != nil {
+		httpserver.WriteServiceError(w, h.log, err)
+		return
+	}
+
+	types.WriteOK(w, struct{}{})
 }
 
 func (h *Handler) handleUpdateConstraints(w http.ResponseWriter, r *http.Request) {

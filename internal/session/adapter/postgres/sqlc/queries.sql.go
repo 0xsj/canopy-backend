@@ -15,21 +15,22 @@ import (
 
 const createSession = `-- name: CreateSession :exec
 INSERT INTO sessions (id, workspace_id, user_id, seed_id, parent_leaf_id,
-    session_type, status, messages, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    session_type, status, messages, created_at, updated_at, source_leaf_ids)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 `
 
 type CreateSessionParams struct {
-	ID           string
-	WorkspaceID  string
-	UserID       string
-	SeedID       string
-	ParentLeafID *string
-	SessionType  string
-	Status       string
-	Messages     json.RawMessage
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID            string
+	WorkspaceID   string
+	UserID        string
+	SeedID        string
+	ParentLeafID  *string
+	SessionType   string
+	Status        string
+	Messages      json.RawMessage
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	SourceLeafIds []string
 }
 
 func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) error {
@@ -44,13 +45,14 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) er
 		arg.Messages,
 		arg.CreatedAt,
 		arg.UpdatedAt,
+		arg.SourceLeafIds,
 	)
 	return err
 }
 
 const findActiveSessionsByUser = `-- name: FindActiveSessionsByUser :many
 SELECT id, workspace_id, user_id, seed_id, parent_leaf_id,
-    session_type, status, messages, created_at, updated_at
+    session_type, status, messages, created_at, updated_at, source_leaf_ids
 FROM sessions
 WHERE workspace_id = $1 AND user_id = $2 AND status NOT IN ('completed', 'abandoned')
 ORDER BY created_at DESC
@@ -81,6 +83,7 @@ func (q *Queries) FindActiveSessionsByUser(ctx context.Context, arg FindActiveSe
 			&i.Messages,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SourceLeafIds,
 		); err != nil {
 			return nil, err
 		}
@@ -94,7 +97,7 @@ func (q *Queries) FindActiveSessionsByUser(ctx context.Context, arg FindActiveSe
 
 const findSessionByID = `-- name: FindSessionByID :one
 SELECT id, workspace_id, user_id, seed_id, parent_leaf_id,
-    session_type, status, messages, created_at, updated_at
+    session_type, status, messages, created_at, updated_at, source_leaf_ids
 FROM sessions WHERE id = $1
 `
 
@@ -112,8 +115,49 @@ func (q *Queries) FindSessionByID(ctx context.Context, id string) (Session, erro
 		&i.Messages,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SourceLeafIds,
 	)
 	return i, err
+}
+
+const findSessionsByWorkspace = `-- name: FindSessionsByWorkspace :many
+SELECT id, workspace_id, user_id, seed_id, parent_leaf_id,
+    session_type, status, messages, created_at, updated_at, source_leaf_ids
+FROM sessions
+WHERE workspace_id = $1
+ORDER BY created_at DESC
+`
+
+func (q *Queries) FindSessionsByWorkspace(ctx context.Context, workspaceID string) ([]Session, error) {
+	rows, err := q.db.Query(ctx, findSessionsByWorkspace, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Session{}
+	for rows.Next() {
+		var i Session
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.UserID,
+			&i.SeedID,
+			&i.ParentLeafID,
+			&i.SessionType,
+			&i.Status,
+			&i.Messages,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SourceLeafIds,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updateSession = `-- name: UpdateSession :execresult

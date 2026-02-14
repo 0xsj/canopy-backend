@@ -3,9 +3,10 @@ package v1
 import "github.com/0xsj/canopy-backend/internal/session/domain"
 
 type StartSessionRequest struct {
-	SeedID       string `json:"seed_id"`
-	ParentLeafID string `json:"parent_leaf_id,omitempty"`
-	SessionType  string `json:"session_type"`
+	SeedID        string   `json:"seed_id"`
+	ParentLeafID  string   `json:"parent_leaf_id,omitempty"`
+	SourceLeafIDs []string `json:"source_leaf_ids,omitempty"`
+	SessionType   string   `json:"session_type"`
 }
 
 type AddMessageRequest struct {

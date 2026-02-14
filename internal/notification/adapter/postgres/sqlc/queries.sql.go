@@ -48,6 +48,30 @@ func (q *Queries) CreateNotification(ctx context.Context, arg CreateNotification
 	return err
 }
 
+const findNotificationByID = `-- name: FindNotificationByID :one
+SELECT id, user_id, channel, title, body, resource_type, resource_id, workspace_id, status, created_at, updated_at
+FROM notifications WHERE id = $1
+`
+
+func (q *Queries) FindNotificationByID(ctx context.Context, id string) (Notification, error) {
+	row := q.db.QueryRow(ctx, findNotificationByID, id)
+	var i Notification
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Channel,
+		&i.Title,
+		&i.Body,
+		&i.ResourceType,
+		&i.ResourceID,
+		&i.WorkspaceID,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const findNotificationsByUser = `-- name: FindNotificationsByUser :many
 SELECT id, user_id, channel, title, body, resource_type, resource_id, workspace_id, status, created_at, updated_at
 FROM notifications WHERE user_id = $1

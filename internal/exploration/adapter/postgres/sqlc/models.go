@@ -42,4 +42,6 @@ type Leafe struct {
 	Sources       json.RawMessage
 	Metadata      json.RawMessage
 	CreatedAt     time.Time
+	PositionX     float64
+	PositionY     float64
 }

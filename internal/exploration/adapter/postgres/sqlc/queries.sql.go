@@ -70,8 +70,8 @@ func (q *Queries) CreateConnection(ctx context.Context, arg CreateConnectionPara
 const createLeaf = `-- name: CreateLeaf :exec
 
 INSERT INTO leaves (id, workspace_id, seed_id, branch_id, author_id, parent_leaf_id,
-    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at, position_x, position_y)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 `
 
 type CreateLeafParams struct {
@@ -90,6 +90,8 @@ type CreateLeafParams struct {
 	Sources       json.RawMessage
 	Metadata      json.RawMessage
 	CreatedAt     time.Time
+	PositionX     float64
+	PositionY     float64
 }
 
 // Leaf queries
@@ -110,6 +112,8 @@ func (q *Queries) CreateLeaf(ctx context.Context, arg CreateLeafParams) error {
 		arg.Sources,
 		arg.Metadata,
 		arg.CreatedAt,
+		arg.PositionX,
+		arg.PositionY,
 	)
 	return err
 }
@@ -316,7 +320,7 @@ func (q *Queries) FindConnectionsByWorkspace(ctx context.Context, workspaceID st
 
 const findLeafByID = `-- name: FindLeafByID :one
 SELECT id, workspace_id, seed_id, branch_id, author_id, parent_leaf_id,
-    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at
+    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at, position_x, position_y
 FROM leaves WHERE id = $1
 `
 
@@ -339,13 +343,15 @@ func (q *Queries) FindLeafByID(ctx context.Context, id string) (Leafe, error) {
 		&i.Sources,
 		&i.Metadata,
 		&i.CreatedAt,
+		&i.PositionX,
+		&i.PositionY,
 	)
 	return i, err
 }
 
 const findLeavesByBranch = `-- name: FindLeavesByBranch :many
 SELECT id, workspace_id, seed_id, branch_id, author_id, parent_leaf_id,
-    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at
+    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at, position_x, position_y
 FROM leaves WHERE branch_id = $1 ORDER BY created_at
 `
 
@@ -374,6 +380,8 @@ func (q *Queries) FindLeavesByBranch(ctx context.Context, branchID string) ([]Le
 			&i.Sources,
 			&i.Metadata,
 			&i.CreatedAt,
+			&i.PositionX,
+			&i.PositionY,
 		); err != nil {
 			return nil, err
 		}
@@ -387,7 +395,7 @@ func (q *Queries) FindLeavesByBranch(ctx context.Context, branchID string) ([]Le
 
 const findLeavesByIDs = `-- name: FindLeavesByIDs :many
 SELECT id, workspace_id, seed_id, branch_id, author_id, parent_leaf_id,
-    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at
+    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at, position_x, position_y
 FROM leaves WHERE id = ANY($1::text[])
 `
 
@@ -416,6 +424,8 @@ func (q *Queries) FindLeavesByIDs(ctx context.Context, dollar_1 []string) ([]Lea
 			&i.Sources,
 			&i.Metadata,
 			&i.CreatedAt,
+			&i.PositionX,
+			&i.PositionY,
 		); err != nil {
 			return nil, err
 		}
@@ -429,7 +439,7 @@ func (q *Queries) FindLeavesByIDs(ctx context.Context, dollar_1 []string) ([]Lea
 
 const findLeavesBySeed = `-- name: FindLeavesBySeed :many
 SELECT id, workspace_id, seed_id, branch_id, author_id, parent_leaf_id,
-    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at
+    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at, position_x, position_y
 FROM leaves WHERE seed_id = $1 ORDER BY created_at
 `
 
@@ -458,6 +468,8 @@ func (q *Queries) FindLeavesBySeed(ctx context.Context, seedID string) ([]Leafe,
 			&i.Sources,
 			&i.Metadata,
 			&i.CreatedAt,
+			&i.PositionX,
+			&i.PositionY,
 		); err != nil {
 			return nil, err
 		}
@@ -471,7 +483,7 @@ func (q *Queries) FindLeavesBySeed(ctx context.Context, seedID string) ([]Leafe,
 
 const findLeavesByWorkspace = `-- name: FindLeavesByWorkspace :many
 SELECT id, workspace_id, seed_id, branch_id, author_id, parent_leaf_id,
-    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at
+    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at, position_x, position_y
 FROM leaves
 WHERE workspace_id = $1
   AND ($2::text IS NULL OR author_id = $2)
@@ -520,6 +532,8 @@ func (q *Queries) FindLeavesByWorkspace(ctx context.Context, arg FindLeavesByWor
 			&i.Sources,
 			&i.Metadata,
 			&i.CreatedAt,
+			&i.PositionX,
+			&i.PositionY,
 		); err != nil {
 			return nil, err
 		}
@@ -555,4 +569,18 @@ type UpdateLeafLayerParams struct {
 
 func (q *Queries) UpdateLeafLayer(ctx context.Context, arg UpdateLeafLayerParams) (pgconn.CommandTag, error) {
 	return q.db.Exec(ctx, updateLeafLayer, arg.ID, arg.Layer)
+}
+
+const updateLeafPosition = `-- name: UpdateLeafPosition :execresult
+UPDATE leaves SET position_x = $2, position_y = $3 WHERE id = $1
+`
+
+type UpdateLeafPositionParams struct {
+	ID        string
+	PositionX float64
+	PositionY float64
+}
+
+func (q *Queries) UpdateLeafPosition(ctx context.Context, arg UpdateLeafPositionParams) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, updateLeafPosition, arg.ID, arg.PositionX, arg.PositionY)
 }

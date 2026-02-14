@@ -36,6 +36,8 @@ func leafToCreateParams(l domain.Leaf) (sqlc.CreateLeafParams, error) {
 		Sources:       sourcesJSON,
 		Metadata:      metadataJSON,
 		CreatedAt:     l.Timestamps().CreatedAt.Time(),
+		PositionX:     l.PositionX(),
+		PositionY:     l.PositionY(),
 	}, nil
 }
 
@@ -87,6 +89,7 @@ func leafToDomain(row sqlc.Leafe) (domain.Leaf, error) {
 		domain.Layer(row.Layer),
 		sources,
 		metadata,
+		row.PositionX, row.PositionY,
 		types.Timestamps{CreatedAt: types.TimestampFrom(row.CreatedAt)},
 	), nil
 }

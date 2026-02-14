@@ -14,6 +14,7 @@ type Querier interface {
 	CreateSession(ctx context.Context, arg CreateSessionParams) error
 	FindActiveSessionsByUser(ctx context.Context, arg FindActiveSessionsByUserParams) ([]Session, error)
 	FindSessionByID(ctx context.Context, id string) (Session, error)
+	FindSessionsByWorkspace(ctx context.Context, workspaceID string) ([]Session, error)
 	UpdateSession(ctx context.Context, arg UpdateSessionParams) (pgconn.CommandTag, error)
 }
 

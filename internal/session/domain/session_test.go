@@ -8,7 +8,7 @@ import (
 
 func newTestSession(t *testing.T) *Session {
 	t.Helper()
-	s, err := NewSession(types.NewWorkspaceID(), types.NewUserID(), types.NewSeedID(), types.LeafID{}, SessionExploration)
+	s, err := NewSession(types.NewWorkspaceID(), types.NewUserID(), types.NewSeedID(), types.LeafID{}, nil, SessionExploration)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

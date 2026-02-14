@@ -27,6 +27,15 @@ func (r *NotificationRepository) Create(ctx context.Context, notif domain.Notifi
 	return database.MapQueryError(r.q.CreateNotification(ctx, notificationToCreateParams(notif)), op)
 }
 
+func (r *NotificationRepository) FindByID(ctx context.Context, id domain.NotificationID) (domain.Notification, error) {
+	const op = "notification: find notification by id"
+	row, err := r.q.FindNotificationByID(ctx, id.String())
+	if err != nil {
+		return domain.Notification{}, database.MapQueryError(err, op)
+	}
+	return notificationToDomain(row), nil
+}
+
 func (r *NotificationRepository) FindByUser(ctx context.Context, userID types.UserID, limit int) ([]domain.Notification, error) {
 	const op = "notification: find notifications by user"
 	rows, err := r.q.FindNotificationsByUser(ctx, sqlc.FindNotificationsByUserParams{

@@ -17,4 +17,5 @@ type Deliverable struct {
 	Version       int32
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+	Finalized     bool
 }

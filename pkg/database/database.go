@@ -42,6 +42,16 @@ func Connect(ctx context.Context, cfg Config, log logger.Logger) (*DB, error) {
 	poolCfg.MaxConnLifetime = cfg.MaxConnLifetime
 	poolCfg.MaxConnIdleTime = cfg.MaxConnIdleTime
 
+	// Set search_path so unqualified table names resolve to the correct
+	// bounded-context schema. Without this, queries hit the default "$user"
+	// schema (canopy) instead of the per-context schemas (workspace, identity, …).
+	if cfg.SearchPath != "" {
+		if poolCfg.ConnConfig.RuntimeParams == nil {
+			poolCfg.ConnConfig.RuntimeParams = make(map[string]string)
+		}
+		poolCfg.ConnConfig.RuntimeParams["search_path"] = cfg.SearchPath
+	}
+
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		return nil, fmt.Errorf("database: connect: %w", err)
@@ -87,6 +97,7 @@ type Config struct {
 	MinPoolSize     int
 	MaxConnLifetime time.Duration
 	MaxConnIdleTime time.Duration
+	SearchPath      string
 }
 
 func (c *Config) Load(env config.EnvReader) {
@@ -95,6 +106,8 @@ func (c *Config) Load(env config.EnvReader) {
 	c.MinPoolSize = env.Int("MIN_POOL_SIZE", 5)
 	c.MaxConnLifetime = env.Duration("MAX_CONN_LIFETIME", 30*time.Minute)
 	c.MaxConnIdleTime = env.Duration("MAX_CONN_IDLE_TIME", 5*time.Minute)
+	c.SearchPath = env.String("SEARCH_PATH",
+		"identity,organization,workspace,seed,exploration,discussion,convergence,session,synthesis,deliverable,notification,ledger,public")
 }
 
 func (c *Config) Validate() error {

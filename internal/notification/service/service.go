@@ -122,12 +122,31 @@ func (s *Service) FindUnread(ctx context.Context) ([]domain.Notification, error)
 // MarkRead marks a single notification as read.
 func (s *Service) MarkRead(ctx context.Context, notificationID domain.NotificationID) error {
 	const op = "notification: mark read"
-	// Notification lookup is by ID; we skip ownership check for simplicity.
-	// In production, verify the notification belongs to the caller.
-	_ = ctx
-	_ = notificationID
-	// TODO: Implement when individual notification fetch is available.
-	return canopyerr.Wrap(canopyerr.ErrNotFound, op)
+
+	callerID, err := s.authenticatedUserID(ctx)
+	if err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	notif, err := s.notifications.FindByID(ctx, notificationID)
+	if err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	// Ownership check: only the notification's user can mark it read.
+	if notif.UserID() != callerID {
+		return canopyerr.Wrap(canopyerr.ErrUnauthorized, op)
+	}
+
+	if err := notif.MarkRead(); err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	if err := s.notifications.Update(ctx, notif); err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	return nil
 }
 
 // MarkAllRead marks all notifications as read for the authenticated user.

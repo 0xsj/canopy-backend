@@ -48,3 +48,19 @@ FROM workspace_members WHERE workspace_id = $1 AND user_id = $2;
 
 -- name: UpdateWorkspaceMemberRole :execresult
 UPDATE workspace_members SET role = $3 WHERE workspace_id = $1 AND user_id = $2;
+
+-- LLM config queries
+
+-- name: UpsertLLMConfig :exec
+INSERT INTO llm_configs (workspace_id, provider, model, api_key_enc, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (workspace_id)
+DO UPDATE SET provider = EXCLUDED.provider, model = EXCLUDED.model,
+             api_key_enc = EXCLUDED.api_key_enc, updated_at = EXCLUDED.updated_at;
+
+-- name: FindLLMConfigByWorkspace :one
+SELECT workspace_id, provider, model, api_key_enc, created_at, updated_at
+FROM llm_configs WHERE workspace_id = $1;
+
+-- name: DeleteLLMConfig :execresult
+DELETE FROM llm_configs WHERE workspace_id = $1;

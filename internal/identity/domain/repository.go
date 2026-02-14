@@ -31,3 +31,17 @@ type UserRepository interface {
 	// if the user does not exist.
 	Update(ctx context.Context, user User) error
 }
+
+// UserLLMConfigRepository defines the persistence port for per-user LLM configurations.
+type UserLLMConfigRepository interface {
+	// Upsert creates or updates the user's LLM configuration.
+	Upsert(ctx context.Context, cfg UserLLMConfig) error
+
+	// FindByUser returns the LLM configuration for a user.
+	// Returns a NotFound error if no config exists.
+	FindByUser(ctx context.Context, userID types.UserID) (UserLLMConfig, error)
+
+	// Delete removes the user's LLM configuration.
+	// Returns a NotFound error if no config exists.
+	Delete(ctx context.Context, userID types.UserID) error
+}

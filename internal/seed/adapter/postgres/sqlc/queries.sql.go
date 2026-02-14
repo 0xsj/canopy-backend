@@ -14,8 +14,8 @@ import (
 )
 
 const createSeed = `-- name: CreateSeed :exec
-INSERT INTO seeds (id, workspace_id, author_id, title, description, constraints, tags, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+INSERT INTO seeds (id, workspace_id, author_id, title, description, constraints, tags, created_at, updated_at, position_x, position_y)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 `
 
 type CreateSeedParams struct {
@@ -28,6 +28,8 @@ type CreateSeedParams struct {
 	Tags        []string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	PositionX   float64
+	PositionY   float64
 }
 
 func (q *Queries) CreateSeed(ctx context.Context, arg CreateSeedParams) error {
@@ -41,12 +43,14 @@ func (q *Queries) CreateSeed(ctx context.Context, arg CreateSeedParams) error {
 		arg.Tags,
 		arg.CreatedAt,
 		arg.UpdatedAt,
+		arg.PositionX,
+		arg.PositionY,
 	)
 	return err
 }
 
 const findSeedByID = `-- name: FindSeedByID :one
-SELECT id, workspace_id, author_id, title, description, constraints, tags, created_at, updated_at
+SELECT id, workspace_id, author_id, title, description, constraints, tags, created_at, updated_at, position_x, position_y
 FROM seeds WHERE id = $1
 `
 
@@ -63,12 +67,14 @@ func (q *Queries) FindSeedByID(ctx context.Context, id string) (Seed, error) {
 		&i.Tags,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PositionX,
+		&i.PositionY,
 	)
 	return i, err
 }
 
 const findSeedsByWorkspace = `-- name: FindSeedsByWorkspace :many
-SELECT id, workspace_id, author_id, title, description, constraints, tags, created_at, updated_at
+SELECT id, workspace_id, author_id, title, description, constraints, tags, created_at, updated_at, position_x, position_y
 FROM seeds WHERE workspace_id = $1 ORDER BY created_at
 `
 
@@ -91,6 +97,8 @@ func (q *Queries) FindSeedsByWorkspace(ctx context.Context, workspaceID string) 
 			&i.Tags,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.PositionX,
+			&i.PositionY,
 		); err != nil {
 			return nil, err
 		}
@@ -122,4 +130,18 @@ func (q *Queries) UpdateSeed(ctx context.Context, arg UpdateSeedParams) (pgconn.
 		arg.Tags,
 		arg.UpdatedAt,
 	)
+}
+
+const updateSeedPosition = `-- name: UpdateSeedPosition :execresult
+UPDATE seeds SET position_x = $2, position_y = $3, updated_at = NOW() WHERE id = $1
+`
+
+type UpdateSeedPositionParams struct {
+	ID        string
+	PositionX float64
+	PositionY float64
+}
+
+func (q *Queries) UpdateSeedPosition(ctx context.Context, arg UpdateSeedPositionParams) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, updateSeedPosition, arg.ID, arg.PositionX, arg.PositionY)
 }

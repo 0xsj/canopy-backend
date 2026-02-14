@@ -9,6 +9,7 @@ import (
 	"github.com/0xsj/canopy-backend/pkg/auth"
 	canopyerr "github.com/0xsj/canopy-backend/pkg/errors"
 	"github.com/0xsj/canopy-backend/pkg/events"
+	"github.com/0xsj/canopy-backend/pkg/llm"
 	"github.com/0xsj/canopy-backend/pkg/observability/logger"
 	"github.com/0xsj/canopy-backend/pkg/types"
 )
@@ -22,6 +23,7 @@ type WorkspaceMemberReader interface {
 type Service struct {
 	sessions  domain.SessionRepository
 	assembler domain.ContextAssembler
+	llm       llm.ProviderResolver
 	wsMembers WorkspaceMemberReader
 	pub       events.Publisher
 	log       logger.Logger
@@ -31,6 +33,7 @@ type Service struct {
 func New(
 	sessions domain.SessionRepository,
 	assembler domain.ContextAssembler,
+	llmResolver llm.ProviderResolver,
 	wsMembers WorkspaceMemberReader,
 	pub events.Publisher,
 	log logger.Logger,
@@ -38,10 +41,43 @@ func New(
 	return &Service{
 		sessions:  sessions,
 		assembler: assembler,
+		llm:       llmResolver,
 		wsMembers: wsMembers,
 		pub:       pub,
 		log:       log,
 	}
+}
+
+// GetSession returns a single session by ID. Caller must be a member of the session's workspace.
+func (s *Service) GetSession(ctx context.Context, sessionID domain.SessionID) (domain.Session, error) {
+	const op = "session: get"
+
+	session, err := s.sessions.FindByID(ctx, sessionID)
+	if err != nil {
+		return domain.Session{}, canopyerr.Wrap(err, op)
+	}
+
+	if _, err := s.requireMember(ctx, session.WorkspaceID()); err != nil {
+		return domain.Session{}, canopyerr.Wrap(err, op)
+	}
+
+	return session, nil
+}
+
+// ListSessions returns all sessions for a workspace. Caller must be a workspace member.
+func (s *Service) ListSessions(ctx context.Context, workspaceID types.WorkspaceID) ([]domain.Session, error) {
+	const op = "session: list"
+
+	if _, err := s.requireMember(ctx, workspaceID); err != nil {
+		return nil, canopyerr.Wrap(err, op)
+	}
+
+	sessions, err := s.sessions.FindByWorkspace(ctx, workspaceID)
+	if err != nil {
+		return nil, canopyerr.Wrap(err, op)
+	}
+
+	return sessions, nil
 }
 
 // StartSession creates a new AI-assisted session. Caller must be a workspace member.
@@ -50,6 +86,7 @@ func (s *Service) StartSession(
 	workspaceID types.WorkspaceID,
 	seedID types.SeedID,
 	parentLeafID types.LeafID,
+	sourceLeafIDs []types.LeafID,
 	sessionType domain.SessionType,
 ) (domain.Session, error) {
 	const op = "session: start"
@@ -59,7 +96,7 @@ func (s *Service) StartSession(
 		return domain.Session{}, canopyerr.Wrap(err, op)
 	}
 
-	session, err := domain.NewSession(workspaceID, callerID, seedID, parentLeafID, sessionType)
+	session, err := domain.NewSession(workspaceID, callerID, seedID, parentLeafID, sourceLeafIDs, sessionType)
 	if err != nil {
 		return domain.Session{}, canopyerr.Wrap(err, op)
 	}
@@ -85,7 +122,8 @@ func (s *Service) StartSession(
 	return session, nil
 }
 
-// AddMessage appends a message to a session.
+// AddMessage appends a user message to a session, calls the LLM, and appends the assistant response.
+// Idempotent: if the last user message has the same content, returns the session as-is.
 func (s *Service) AddMessage(ctx context.Context, sessionID domain.SessionID, msg domain.Message) (domain.Session, error) {
 	const op = "session: add message"
 
@@ -94,6 +132,24 @@ func (s *Service) AddMessage(ctx context.Context, sessionID domain.SessionID, ms
 		return domain.Session{}, canopyerr.Wrap(err, op)
 	}
 
+	// Idempotency guard: if the most recent message with the same role has
+	// identical content, this is a duplicate (e.g. client retried after timeout).
+	// Check the last TWO messages to catch both cases:
+	//   - Last msg is user (LLM still running): last.Role == msg.Role
+	//   - Last msg is assistant (LLM completed): second-to-last is the user msg
+	if msgs := session.Messages(); len(msgs) > 0 {
+		for i := len(msgs) - 1; i >= 0 && i >= len(msgs)-2; i-- {
+			if msgs[i].Role == msg.Role && msgs[i].Content == msg.Content {
+				s.log.Info("duplicate message skipped",
+					logger.String("session_id", sessionID.String()),
+					logger.String("role", msg.Role),
+				)
+				return session, nil
+			}
+		}
+	}
+
+	// Append the user message.
 	if err := session.AddMessage(msg); err != nil {
 		return domain.Session{}, canopyerr.Wrap(err, op)
 	}
@@ -101,6 +157,53 @@ func (s *Service) AddMessage(ctx context.Context, sessionID domain.SessionID, ms
 	if err := s.sessions.Update(ctx, session); err != nil {
 		return domain.Session{}, canopyerr.Wrap(err, op)
 	}
+
+	// Assemble context and call LLM.
+	// Use a detached context for the LLM call so it completes even if the
+	// HTTP client disconnects (prevents orphaned user messages without responses).
+	llmCtx, llmCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Minute)
+	defer llmCancel()
+
+	assembled, err := s.assembler.Assemble(llmCtx, session)
+	if err != nil {
+		s.log.Error("context assembly failed", logger.Err(err))
+		return session, canopyerr.Wrap(err, op)
+	}
+
+	llmMessages := make([]llm.Message, len(assembled))
+	for i, m := range assembled {
+		llmMessages[i] = llm.Message{Role: m.Role, Content: m.Content}
+	}
+
+	provider, err := s.llm.Resolve(llmCtx, session.WorkspaceID())
+	if err != nil {
+		s.log.Error("llm resolve failed", logger.Err(err))
+		return session, canopyerr.Wrap(err, op)
+	}
+
+	resp, err := provider.ChatCompletion(llmCtx, llm.ChatRequest{
+		Messages: llmMessages,
+	})
+	if err != nil {
+		s.log.Error("llm call failed", logger.Err(err))
+		return session, canopyerr.Wrap(err, op)
+	}
+
+	// Append the assistant response.
+	assistantMsg := domain.Message{Role: "assistant", Content: resp.Content}
+	if err := session.AddMessage(assistantMsg); err != nil {
+		return domain.Session{}, canopyerr.Wrap(err, op)
+	}
+
+	if err := s.sessions.Update(llmCtx, session); err != nil {
+		return domain.Session{}, canopyerr.Wrap(err, op)
+	}
+
+	s.log.Debug("llm response added",
+		logger.String("session_id", sessionID.String()),
+		logger.Int("input_tokens", resp.Usage.InputTokens),
+		logger.Int("output_tokens", resp.Usage.OutputTokens),
+	)
 
 	return session, nil
 }

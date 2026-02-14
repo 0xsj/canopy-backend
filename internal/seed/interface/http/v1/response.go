@@ -13,6 +13,8 @@ type SeedResponse struct {
 	Description string           `json:"description"`
 	Constraints map[string]any   `json:"constraints,omitempty"`
 	Tags        []string         `json:"tags,omitempty"`
+	PositionX   float64          `json:"position_x"`
+	PositionY   float64          `json:"position_y"`
 	CreatedAt   types.Timestamp  `json:"created_at"`
 	UpdatedAt   *types.Timestamp `json:"updated_at,omitempty"`
 }
@@ -27,6 +29,8 @@ func SeedFromDomain(s domain.Seed) SeedResponse {
 		Description: s.Description(),
 		Constraints: s.Constraints(),
 		Tags:        s.Tags(),
+		PositionX:   s.PositionX(),
+		PositionY:   s.PositionY(),
 		CreatedAt:   ts.CreatedAt,
 		UpdatedAt:   ts.UpdatedAt,
 	}

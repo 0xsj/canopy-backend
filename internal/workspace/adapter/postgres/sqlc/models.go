@@ -9,6 +9,15 @@ import (
 	"time"
 )
 
+type LlmConfig struct {
+	WorkspaceID string
+	Provider    string
+	Model       string
+	ApiKeyEnc   []byte
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
 type Workspace struct {
 	ID             string
 	OrgID          string

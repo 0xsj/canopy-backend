@@ -17,3 +17,22 @@ type UpdateConfigRequest struct {
 type TransitionPhaseRequest struct {
 	Target string `json:"target"`
 }
+
+type AddMemberRequest struct {
+	UserID string `json:"user_id"`
+}
+
+type UpdateDetailsRequest struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+type UpdateConfigurationRequest struct {
+	Configuration map[string]any `json:"configuration"`
+}
+
+type SetLLMConfigRequest struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	APIKey   string `json:"api_key"`
+}

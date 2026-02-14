@@ -15,6 +15,8 @@ type Querier interface {
 	AddWorkspaceMember(ctx context.Context, arg AddWorkspaceMemberParams) error
 	// Workspace queries
 	CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams) error
+	DeleteLLMConfig(ctx context.Context, workspaceID string) (pgconn.CommandTag, error)
+	FindLLMConfigByWorkspace(ctx context.Context, workspaceID string) (LlmConfig, error)
 	FindWorkspaceByID(ctx context.Context, id string) (Workspace, error)
 	FindWorkspaceMember(ctx context.Context, arg FindWorkspaceMemberParams) (WorkspaceMember, error)
 	FindWorkspaceMembersByUser(ctx context.Context, arg FindWorkspaceMembersByUserParams) ([]WorkspaceMember, error)
@@ -24,6 +26,8 @@ type Querier interface {
 	RemoveWorkspaceMember(ctx context.Context, arg RemoveWorkspaceMemberParams) (pgconn.CommandTag, error)
 	UpdateWorkspace(ctx context.Context, arg UpdateWorkspaceParams) (pgconn.CommandTag, error)
 	UpdateWorkspaceMemberRole(ctx context.Context, arg UpdateWorkspaceMemberRoleParams) (pgconn.CommandTag, error)
+	// LLM config queries
+	UpsertLLMConfig(ctx context.Context, arg UpsertLLMConfigParams) error
 }
 
 var _ Querier = (*Queries)(nil)

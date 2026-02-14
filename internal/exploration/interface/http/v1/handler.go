@@ -27,8 +27,14 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/workspaces/{wsId}/branches", h.handleStartBranch)
 	mux.HandleFunc("GET /api/v1/branches/{branchId}", h.handleGetBranch)
 	mux.HandleFunc("POST /api/v1/workspaces/{wsId}/connections", h.handleCreateConnection)
+	mux.HandleFunc("GET /api/v1/workspaces/{wsId}/connections", h.handleListWorkspaceConnections)
 	mux.HandleFunc("GET /api/v1/leaves/{leafId}/connections", h.handleListConnections)
 	mux.HandleFunc("POST /api/v1/leaves/{leafId}/promote", h.handlePromoteLeaf)
+	mux.HandleFunc("PATCH /api/v1/leaves/{leafId}/position", h.handleUpdateLeafPosition)
+	mux.HandleFunc("GET /api/v1/leaves/{leafId}/ancestors", h.handleGetAncestors)
+	mux.HandleFunc("GET /api/v1/leaves/{leafId}/descendants", h.handleGetDescendants)
+	mux.HandleFunc("GET /api/v1/leaves/{leafId}/neighborhood", h.handleGetNeighborhood)
+	mux.HandleFunc("GET /api/v1/leaves/{leafId}/lineage", h.handleGetLineage)
 }
 
 func (h *Handler) handleCreateLeaf(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +155,16 @@ func (h *Handler) handleStartBranch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	branch, leaf, err := h.svc.StartBranch(r.Context(), wsID, seedID, req.Title, req.Summary, req.KeyPoints, req.OpenQuestions, req.Tags)
+	var parentLeafID types.LeafID
+	if req.ParentLeafID != "" {
+		parentLeafID, err = types.ParseLeafID(req.ParentLeafID)
+		if err != nil {
+			types.WriteError(w, http.StatusBadRequest, "invalid_id", err.Error())
+			return
+		}
+	}
+
+	branch, leaf, err := h.svc.StartBranch(r.Context(), wsID, seedID, parentLeafID, req.Title, req.Summary, req.KeyPoints, req.OpenQuestions, req.Tags)
 	if err != nil {
 		httpserver.WriteServiceError(w, h.log, err)
 		return
@@ -208,6 +223,22 @@ func (h *Handler) handleCreateConnection(w http.ResponseWriter, r *http.Request)
 	types.WriteCreated(w, ConnectionFromDomain(conn))
 }
 
+func (h *Handler) handleListWorkspaceConnections(w http.ResponseWriter, r *http.Request) {
+	wsID, err := types.ParseWorkspaceID(httpserver.PathParam(r, "wsId"))
+	if err != nil {
+		types.WriteError(w, http.StatusBadRequest, "invalid_id", err.Error())
+		return
+	}
+
+	conns, err := h.svc.FindConnectionsByWorkspace(r.Context(), wsID)
+	if err != nil {
+		httpserver.WriteServiceError(w, h.log, err)
+		return
+	}
+
+	types.WriteOK(w, ConnectionsFromDomain(conns))
+}
+
 func (h *Handler) handleListConnections(w http.ResponseWriter, r *http.Request) {
 	leafID, err := types.ParseLeafID(httpserver.PathParam(r, "leafId"))
 	if err != nil {
@@ -224,6 +255,26 @@ func (h *Handler) handleListConnections(w http.ResponseWriter, r *http.Request) 
 	types.WriteOK(w, ConnectionsFromDomain(conns))
 }
 
+func (h *Handler) handleUpdateLeafPosition(w http.ResponseWriter, r *http.Request) {
+	leafID, err := types.ParseLeafID(httpserver.PathParam(r, "leafId"))
+	if err != nil {
+		types.WriteError(w, http.StatusBadRequest, "invalid_id", err.Error())
+		return
+	}
+
+	var req UpdateLeafPositionRequest
+	if !httpserver.DecodeBody(w, r, &req) {
+		return
+	}
+
+	if err := h.svc.UpdateLeafPosition(r.Context(), leafID, req.PositionX, req.PositionY); err != nil {
+		httpserver.WriteServiceError(w, h.log, err)
+		return
+	}
+
+	types.WriteOK(w, struct{}{})
+}
+
 func (h *Handler) handlePromoteLeaf(w http.ResponseWriter, r *http.Request) {
 	leafID, err := types.ParseLeafID(httpserver.PathParam(r, "leafId"))
 	if err != nil {
@@ -237,4 +288,76 @@ func (h *Handler) handlePromoteLeaf(w http.ResponseWriter, r *http.Request) {
 	}
 
 	types.WriteOK(w, struct{}{})
+}
+
+func (h *Handler) handleGetAncestors(w http.ResponseWriter, r *http.Request) {
+	leafID, err := types.ParseLeafID(httpserver.PathParam(r, "leafId"))
+	if err != nil {
+		types.WriteError(w, http.StatusBadRequest, "invalid_id", err.Error())
+		return
+	}
+
+	leaves, err := h.svc.GetAncestors(r.Context(), leafID)
+	if err != nil {
+		httpserver.WriteServiceError(w, h.log, err)
+		return
+	}
+
+	types.WriteOK(w, LeavesFromDomain(leaves))
+}
+
+func (h *Handler) handleGetDescendants(w http.ResponseWriter, r *http.Request) {
+	leafID, err := types.ParseLeafID(httpserver.PathParam(r, "leafId"))
+	if err != nil {
+		types.WriteError(w, http.StatusBadRequest, "invalid_id", err.Error())
+		return
+	}
+
+	leaves, err := h.svc.GetDescendants(r.Context(), leafID)
+	if err != nil {
+		httpserver.WriteServiceError(w, h.log, err)
+		return
+	}
+
+	types.WriteOK(w, LeavesFromDomain(leaves))
+}
+
+func (h *Handler) handleGetNeighborhood(w http.ResponseWriter, r *http.Request) {
+	leafID, err := types.ParseLeafID(httpserver.PathParam(r, "leafId"))
+	if err != nil {
+		types.WriteError(w, http.StatusBadRequest, "invalid_id", err.Error())
+		return
+	}
+
+	depth := httpserver.QueryInt(r, "depth", 2)
+	if depth < 1 {
+		depth = 1
+	}
+	if depth > 5 {
+		depth = 5
+	}
+
+	leaves, err := h.svc.GetNeighborhood(r.Context(), leafID, depth)
+	if err != nil {
+		httpserver.WriteServiceError(w, h.log, err)
+		return
+	}
+
+	types.WriteOK(w, LeavesFromDomain(leaves))
+}
+
+func (h *Handler) handleGetLineage(w http.ResponseWriter, r *http.Request) {
+	leafID, err := types.ParseLeafID(httpserver.PathParam(r, "leafId"))
+	if err != nil {
+		types.WriteError(w, http.StatusBadRequest, "invalid_id", err.Error())
+		return
+	}
+
+	leaves, err := h.svc.GetSynthesisLineage(r.Context(), leafID)
+	if err != nil {
+		httpserver.WriteServiceError(w, h.log, err)
+		return
+	}
+
+	types.WriteOK(w, LeavesFromDomain(leaves))
 }

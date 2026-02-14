@@ -48,3 +48,17 @@ type WorkspaceMemberRepository interface {
 	// UpdateRole persists a role change for an existing membership.
 	UpdateRole(ctx context.Context, member WorkspaceMember) error
 }
+
+// LLMConfigRepository defines the persistence port for workspace LLM configurations.
+type LLMConfigRepository interface {
+	// Upsert creates or replaces the LLM config for a workspace.
+	Upsert(ctx context.Context, cfg LLMConfig) error
+
+	// FindByWorkspace returns the LLM config for a workspace.
+	// Returns a NotFound error if the workspace has no custom config.
+	FindByWorkspace(ctx context.Context, wsID types.WorkspaceID) (LLMConfig, error)
+
+	// Delete removes the LLM config for a workspace.
+	// Returns a NotFound error if no config exists.
+	Delete(ctx context.Context, wsID types.WorkspaceID) error
+}

@@ -13,8 +13,8 @@ import (
 )
 
 const createDeliverable = `-- name: CreateDeliverable :exec
-INSERT INTO deliverables (id, workspace_id, format, content, source_leaf_ids, version, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO deliverables (id, workspace_id, format, content, source_leaf_ids, version, created_at, updated_at, finalized)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 `
 
 type CreateDeliverableParams struct {
@@ -26,6 +26,7 @@ type CreateDeliverableParams struct {
 	Version       int32
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+	Finalized     bool
 }
 
 func (q *Queries) CreateDeliverable(ctx context.Context, arg CreateDeliverableParams) error {
@@ -38,12 +39,13 @@ func (q *Queries) CreateDeliverable(ctx context.Context, arg CreateDeliverablePa
 		arg.Version,
 		arg.CreatedAt,
 		arg.UpdatedAt,
+		arg.Finalized,
 	)
 	return err
 }
 
 const findDeliverableByID = `-- name: FindDeliverableByID :one
-SELECT id, workspace_id, format, content, source_leaf_ids, version, created_at, updated_at
+SELECT id, workspace_id, format, content, source_leaf_ids, version, created_at, updated_at, finalized
 FROM deliverables WHERE id = $1
 `
 
@@ -59,12 +61,13 @@ func (q *Queries) FindDeliverableByID(ctx context.Context, id string) (Deliverab
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Finalized,
 	)
 	return i, err
 }
 
 const findDeliverablesByWorkspace = `-- name: FindDeliverablesByWorkspace :many
-SELECT id, workspace_id, format, content, source_leaf_ids, version, created_at, updated_at
+SELECT id, workspace_id, format, content, source_leaf_ids, version, created_at, updated_at, finalized
 FROM deliverables WHERE workspace_id = $1 ORDER BY created_at
 `
 
@@ -86,6 +89,7 @@ func (q *Queries) FindDeliverablesByWorkspace(ctx context.Context, workspaceID s
 			&i.Version,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Finalized,
 		); err != nil {
 			return nil, err
 		}
@@ -99,7 +103,7 @@ func (q *Queries) FindDeliverablesByWorkspace(ctx context.Context, workspaceID s
 
 const updateDeliverable = `-- name: UpdateDeliverable :execresult
 UPDATE deliverables
-SET format = $2, content = $3, source_leaf_ids = $4, version = $5, updated_at = $6
+SET format = $2, content = $3, source_leaf_ids = $4, version = $5, updated_at = $6, finalized = $7
 WHERE id = $1
 `
 
@@ -110,6 +114,7 @@ type UpdateDeliverableParams struct {
 	SourceLeafIds []string
 	Version       int32
 	UpdatedAt     time.Time
+	Finalized     bool
 }
 
 func (q *Queries) UpdateDeliverable(ctx context.Context, arg UpdateDeliverableParams) (pgconn.CommandTag, error) {
@@ -120,5 +125,6 @@ func (q *Queries) UpdateDeliverable(ctx context.Context, arg UpdateDeliverablePa
 		arg.SourceLeafIds,
 		arg.Version,
 		arg.UpdatedAt,
+		arg.Finalized,
 	)
 }

@@ -1,8 +1,8 @@
-# Event Subscriber Pattern (Ledger Example)
+# Event Subscriber Pattern
 
 ## What
 
-Durable JetStream consumers subscribe to event subjects and call service methods to react to cross-context events. Subscribers are registered at startup in the composition root and cleaned up on shutdown.
+Durable JetStream consumers subscribe to event subjects and call service methods to react to cross-context events. Subscribers are registered at startup in the composition root and cleaned up on shutdown. Two patterns exist: **audit handlers** (log everything) and **notification handlers** (fan-out to workspace members).
 
 ## Why
 
@@ -10,58 +10,79 @@ Durable JetStream consumers subscribe to event subjects and call service methods
 - Durable consumers survive restarts — missed events are redelivered
 - Ack/nak semantics: return `nil` to ack, return `error` to trigger redelivery
 - Central registration in `cmd/server/subscribers.go` makes it easy to see all wired reactions
+- Registry-driven: new event types are added by extending a map, not writing new handlers
 
 ## Example
 
-### Registration
+### Registration (Multiple Consumers)
 
 ```go
-func registerSubscribers(ctx context.Context, sub events.Subscriber, ledger *service.Service, log logger.Logger) (func(), error) {
+func registerSubscribers(
+    ctx context.Context,
+    sub events.Subscriber,
+    ledger *ledgerservice.Service,
+    notif *notifservice.Service,
+    members workspaceMemberLister,
+    log logger.Logger,
+) (func(), error) {
     var subs []events.Subscription
 
-    systemSub, err := sub.Subscribe(ctx, "workspace.>",
+    systemSub, _ := sub.Subscribe(ctx, "workspace.>",
         systemAuditHandler(ledger, log),
         events.WithConsumer("ledger_system_audit"))
-    if err != nil {
-        return nil, err
-    }
     subs = append(subs, systemSub)
+
+    notifSub, _ := sub.Subscribe(ctx, "workspace.>",
+        notificationHandler(notif, members, log),
+        events.WithConsumer("notification_events"))
+    subs = append(subs, notifSub)
 
     return func() { cleanupAll(subs) }, nil
 }
 ```
 
-### Handler
+### Fan-Out Notification Handler
 
 ```go
-func systemAuditHandler(ledger *service.Service, log logger.Logger) events.Handler {
+func notificationHandler(notif *notifservice.Service, members workspaceMemberLister, log logger.Logger) events.Handler {
     return func(ctx context.Context, event events.Event) error {
-        // Parse, transform, persist
-        if err := ledger.AppendSystem(ctx, event.Subject, data, sourceCtx); err != nil {
-            return err // nak — triggers redelivery
+        mapping, ok := notificationRegistry[event.Type]
+        if !ok {
+            return nil // ack — not a mapped event
         }
-        return nil // ack
+        // Parse event → find workspace members → exclude actor → send per-member
+        wsMembers, _ := members.FindByWorkspace(ctx, wsID)
+        for _, m := range wsMembers {
+            if m.UserID().String() == actorID { continue }
+            notif.Send(ctx, m.UserID(), ChannelInApp, mapping.title, ...)
+        }
+        return nil // always ack — partial delivery is acceptable
     }
 }
 ```
 
-### Domain Audit Registry (Data-Driven)
+### Registry-Driven Mapping
 
 ```go
-var domainAuditRegistry = map[string]domainAuditMapping{
-    "workspace.created": {action: ActionCreated, resourceType: "workspace", ...},
-    "exploration.leaf.created": {action: ActionCreated, resourceType: "leaf", ...},
+var notificationRegistry = map[string]notificationMapping{
+    "exploration.leaf.created": {
+        title: "New leaf created", resourceType: "leaf",
+        resourceField: "leaf_id", actorField: "author_id",
+    },
+    "convergence.consensus.reached": {
+        title: "Consensus reached", resourceType: "checkpoint",
+        resourceField: "checkpoint_id", actorField: "", // notify all
+    },
 }
 ```
-
-One handler iterates the registry — new event types are added by extending the map, not writing new handlers.
 
 ## Current Subscribers
 
 | Consumer | Subject | Durable | Purpose |
 |---|---|---|---|
 | `ledger_system_audit` | `workspace.>` | Yes | Raw JSON audit of every event |
-| `ledger_domain_audit` | `workspace.>` | Yes | Semantic audit of 10 mapped events |
+| `ledger_domain_audit` | `workspace.>` | Yes | Semantic audit of 23 mapped events |
+| `notification_events` | `workspace.>` | Yes | In-app notifications for 11 event types |
 | WebSocket bridge | `workspace.>` | No | Broadcast to connected clients |
 
 ## Gotchas
@@ -70,7 +91,9 @@ One handler iterates the registry — new event types are added by extending the
 - Return `error` only for transient failures (DB down) — JetStream will redeliver
 - The handler closure captures the service — no global state
 - `events.WithConsumer("name")` creates a durable consumer; omit for ephemeral
-- JetStream streams can't have overlapping subjects — all subscribers share the `canopy_events` stream
+- JetStream streams can't have overlapping subjects — all subscribers share the `canopy` stream
+- Notification handlers run outside HTTP request scope — no auth context available. Actor ID comes from the event payload, not `auth.FromClaims(ctx)`
+- Fan-out always acks: a stuck notification subscriber blocking the queue is worse than a missed notification
 
 ## Related
 

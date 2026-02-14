@@ -118,6 +118,26 @@ func (s *Service) UpdateConstraints(ctx context.Context, seedID types.SeedID, co
 	return seed, nil
 }
 
+// UpdatePosition updates a seed's canvas position. Caller must be a workspace member.
+func (s *Service) UpdatePosition(ctx context.Context, seedID types.SeedID, x, y float64) error {
+	const op = "seed: update position"
+
+	seed, err := s.repo.FindByID(ctx, seedID)
+	if err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	if _, err := s.requireMember(ctx, seed.WorkspaceID()); err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	if err := s.repo.UpdatePosition(ctx, seedID, x, y); err != nil {
+		return canopyerr.Wrap(err, op)
+	}
+
+	return nil
+}
+
 // --- Auth Helpers ---
 
 func (s *Service) requireMember(ctx context.Context, workspaceID types.WorkspaceID) (types.UserID, error) {

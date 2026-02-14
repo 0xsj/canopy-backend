@@ -9,6 +9,8 @@ const (
 	SubjectMemberLeft             = "workspace.member.left"
 	SubjectWorkspaceConfigUpdated = "workspace.config.updated"
 	SubjectPhaseTransitioned      = "workspace.phase.transitioned"
+	SubjectLLMConfigUpdated       = "workspace.llm_config.updated"
+	SubjectLLMConfigDeleted       = "workspace.llm_config.deleted"
 )
 
 // WorkspaceCreatedData is published when a new workspace is created.
@@ -49,4 +51,18 @@ type PhaseTransitionedData struct {
 	PreviousPhase string    `json:"previous_phase"`
 	NewPhase      string    `json:"new_phase"`
 	Timestamp     time.Time `json:"timestamp"`
+}
+
+// LLMConfigUpdatedData is published when a workspace's LLM config is set or changed.
+type LLMConfigUpdatedData struct {
+	WorkspaceID string    `json:"workspace_id"`
+	Provider    string    `json:"provider"`
+	Model       string    `json:"model"`
+	Timestamp   time.Time `json:"timestamp"`
+}
+
+// LLMConfigDeletedData is published when a workspace's LLM config is removed.
+type LLMConfigDeletedData struct {
+	WorkspaceID string    `json:"workspace_id"`
+	Timestamp   time.Time `json:"timestamp"`
 }

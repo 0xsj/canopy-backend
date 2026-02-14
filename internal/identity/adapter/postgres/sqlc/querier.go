@@ -12,10 +12,13 @@ import (
 
 type Querier interface {
 	CreateUser(ctx context.Context, arg CreateUserParams) error
+	DeleteUserLLMConfig(ctx context.Context, userID string) (pgconn.CommandTag, error)
 	FindUserByExternalID(ctx context.Context, externalID string) (User, error)
 	FindUserByID(ctx context.Context, id string) (User, error)
+	FindUserLLMConfigByUser(ctx context.Context, userID string) (UserLlmConfig, error)
 	FindUsersByIDs(ctx context.Context, dollar_1 []string) ([]User, error)
 	UpdateUser(ctx context.Context, arg UpdateUserParams) (pgconn.CommandTag, error)
+	UpsertUserLLMConfig(ctx context.Context, arg UpsertUserLLMConfigParams) error
 }
 
 var _ Querier = (*Queries)(nil)
