@@ -151,10 +151,12 @@ func main() {
 	// LLM resolver: user > workspace > server-wide fallback.
 	resolver := newLLMProviderResolver(wsP.LLMConfigRepo, identityP.LLMConfigRepo, cipher, llmProvider, log)
 
-	assembler := &contextAssembler{seeds: seedP.SeedRepo, leaves: expP.LeafRepo, log: log}
-	sessP := session.Wire(db, assembler, resolver, wsP.MemberRepo, pub, log)
+	broadcaster := &streamBroadcasterAdapter{hub: hub}
 
-	synthP := synthesis.Wire(db, resolver,
+	assembler := &contextAssembler{seeds: seedP.SeedRepo, leaves: expP.LeafRepo, log: log}
+	sessP := session.Wire(db, assembler, resolver, broadcaster, wsP.MemberRepo, pub, log)
+
+	synthP := synthesis.Wire(db, resolver, broadcaster,
 		&sourceLeafReaderAdapter{repo: expP.LeafRepo},
 		&seedReaderForSynthesisAdapter{repo: seedP.SeedRepo},
 		&synthesisLeafCreatorAdapter{

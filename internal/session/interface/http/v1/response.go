@@ -27,6 +27,12 @@ func SessionsFromDomain(sessions []domain.Session) []SessionResponse {
 	return out
 }
 
+type StreamingResponse struct {
+	StreamID  string `json:"stream_id"`
+	SessionID string `json:"session_id"`
+	Status    string `json:"status"`
+}
+
 func SessionFromDomain(s domain.Session) SessionResponse {
 	ts := s.Timestamps()
 

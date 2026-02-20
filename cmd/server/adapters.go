@@ -21,7 +21,22 @@ import (
 	"github.com/0xsj/canopy-backend/pkg/llm"
 	"github.com/0xsj/canopy-backend/pkg/observability/logger"
 	"github.com/0xsj/canopy-backend/pkg/types"
+	"github.com/0xsj/canopy-backend/pkg/websocket"
 )
+
+// streamBroadcasterAdapter implements llm.StreamBroadcaster by forwarding
+// stream messages to the WebSocket hub.
+type streamBroadcasterAdapter struct {
+	hub *websocket.Hub
+}
+
+func (a *streamBroadcasterAdapter) Send(workspaceID string, msg llm.StreamMessage) error {
+	wsMsg, err := websocket.NewMessage(msg.Type, workspaceID, msg)
+	if err != nil {
+		return err
+	}
+	return a.hub.BroadcastMessage(workspaceID, wsMsg)
+}
 
 // userReaderAdapter wraps the identity UserRepository to satisfy the
 // organization service's UserReader cross-context port.

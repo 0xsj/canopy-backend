@@ -118,13 +118,17 @@ func (h *Handler) handleAddMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := h.svc.AddMessage(r.Context(), sessionID, req.Message)
+	streamID, err := h.svc.AddMessageStreaming(r.Context(), sessionID, req.Message)
 	if err != nil {
 		httpserver.WriteServiceError(w, h.log, err)
 		return
 	}
 
-	types.WriteOK(w, SessionFromDomain(session))
+	types.WriteAccepted(w, StreamingResponse{
+		StreamID:  streamID,
+		SessionID: sessionID.String(),
+		Status:    "streaming",
+	})
 }
 
 func (h *Handler) handleCheckpoint(w http.ResponseWriter, r *http.Request) {

@@ -104,6 +104,11 @@ func WriteCreated[T any](w http.ResponseWriter, data T) {
 	Write(w, http.StatusCreated, OK(data))
 }
 
+// WriteAccepted is a shorthand for writing a 202 accepted response.
+func WriteAccepted[T any](w http.ResponseWriter, data T) {
+	Write(w, http.StatusAccepted, OK(data))
+}
+
 // WriteError writes an error response with the given HTTP status code.
 func WriteError(w http.ResponseWriter, statusCode int, code, message string) {
 	Write(w, statusCode, Fail[struct{}](code, message))

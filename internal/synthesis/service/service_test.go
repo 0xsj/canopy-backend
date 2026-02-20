@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/0xsj/canopy-backend/internal/synthesis/domain"
 	wsdomain "github.com/0xsj/canopy-backend/internal/workspace/domain"
@@ -18,6 +19,38 @@ import (
 )
 
 // --- Test doubles ---
+
+// stubBroadcaster implements llm.StreamBroadcaster for unit tests.
+// It signals done when stream.end or stream.error is received.
+type stubBroadcaster struct {
+	messages []llm.StreamMessage
+	done     chan struct{}
+}
+
+func newStubBroadcaster() *stubBroadcaster {
+	return &stubBroadcaster{done: make(chan struct{}, 1)}
+}
+
+func (b *stubBroadcaster) Send(_ string, msg llm.StreamMessage) error {
+	b.messages = append(b.messages, msg)
+	if msg.Type == "stream.end" || msg.Type == "stream.error" {
+		select {
+		case b.done <- struct{}{}:
+		default:
+		}
+	}
+	return nil
+}
+
+// wait blocks until the background goroutine signals completion.
+func (b *stubBroadcaster) wait(t *testing.T) {
+	t.Helper()
+	select {
+	case <-b.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for stream completion")
+	}
+}
 
 // stubSynthesisRepo implements domain.SynthesisRepository for unit tests.
 type stubSynthesisRepo struct {
@@ -212,8 +245,10 @@ func newTestService(
 	leafCreator *stubLeafCreator,
 	wsMembers *stubWSMembers,
 	pub *stubPublisher,
-) *Service {
-	return New(repo, llmProv, leaves, seeds, leafCreator, wsMembers, pub, logger.NewNoop())
+) (*Service, *stubBroadcaster) {
+	bc := newStubBroadcaster()
+	svc := New(repo, llmProv, bc, leaves, seeds, leafCreator, wsMembers, pub, logger.NewNoop())
+	return svc, bc
 }
 
 // --- parseSynthesisResponse tests ---
@@ -511,7 +546,7 @@ func TestStartSynthesis_Success(t *testing.T) {
 	wsMembers := &stubWSMembers{}
 	pub := &stubPublisher{}
 
-	svc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
+	svc, bc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
 
 	ctx := testCtx("user_test")
 	wsID := types.WorkspaceIDFrom("ws_test")
@@ -525,15 +560,13 @@ func TestStartSynthesis_Success(t *testing.T) {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 
-	// Workflow should be completed.
-	if workflow.Status() != domain.WorkflowCompleted {
-		t.Errorf("expected status %s, got %s", domain.WorkflowCompleted, workflow.Status())
+	// Returned workflow should be in processing (async work in goroutine).
+	if workflow.Status() != domain.WorkflowProcessing {
+		t.Errorf("expected status %s, got %s", domain.WorkflowProcessing, workflow.Status())
 	}
 
-	// Result leaf should be set.
-	if workflow.ResultLeafID().String() != "leaf_result" {
-		t.Errorf("expected result leaf ID 'leaf_result', got %q", workflow.ResultLeafID().String())
-	}
+	// Wait for the background goroutine to finish.
+	bc.wait(t)
 
 	// Repo should have been called: Create + Update (for completion).
 	if repo.updatedWorkflow.Status() != domain.WorkflowCompleted {
@@ -587,7 +620,7 @@ func TestStartSynthesis_LLMFailure_WorkflowMarkedFailed(t *testing.T) {
 	wsMembers := &stubWSMembers{}
 	pub := &stubPublisher{}
 
-	svc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
+	svc, bc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
 
 	ctx := testCtx("user_test")
 	wsID := types.WorkspaceIDFrom("ws_test")
@@ -601,13 +634,21 @@ func TestStartSynthesis_LLMFailure_WorkflowMarkedFailed(t *testing.T) {
 		t.Fatalf("expected no hard error (graceful failure), got: %v", err)
 	}
 
-	// Workflow should be failed, not errored out.
-	if workflow.Status() != domain.WorkflowFailed {
-		t.Errorf("expected status %s, got %s", domain.WorkflowFailed, workflow.Status())
+	// Returned workflow should be in processing (async work in goroutine).
+	if workflow.Status() != domain.WorkflowProcessing {
+		t.Errorf("expected status %s, got %s", domain.WorkflowProcessing, workflow.Status())
 	}
 
-	if !strings.Contains(workflow.FailureReason(), "llm call") {
-		t.Errorf("expected failure reason to mention 'llm call', got %q", workflow.FailureReason())
+	// Wait for the background goroutine to finish.
+	bc.wait(t)
+
+	// Repo should have been updated with the failed state.
+	if repo.updatedWorkflow.Status() != domain.WorkflowFailed {
+		t.Errorf("expected updated workflow status %s, got %s", domain.WorkflowFailed, repo.updatedWorkflow.Status())
+	}
+
+	if !strings.Contains(repo.updatedWorkflow.FailureReason(), "llm call") {
+		t.Errorf("expected failure reason to mention 'llm call', got %q", repo.updatedWorkflow.FailureReason())
 	}
 
 	// Leaf creator should NOT have been called.
@@ -646,7 +687,7 @@ func TestStartSynthesis_LeafCreationFailure_WorkflowMarkedFailed(t *testing.T) {
 	wsMembers := &stubWSMembers{}
 	pub := &stubPublisher{}
 
-	svc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
+	svc, bc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
 
 	ctx := testCtx("user_test")
 	wsID := types.WorkspaceIDFrom("ws_test")
@@ -660,12 +701,20 @@ func TestStartSynthesis_LeafCreationFailure_WorkflowMarkedFailed(t *testing.T) {
 		t.Fatalf("expected no hard error (graceful failure), got: %v", err)
 	}
 
-	if workflow.Status() != domain.WorkflowFailed {
-		t.Errorf("expected status %s, got %s", domain.WorkflowFailed, workflow.Status())
+	// Returned workflow should be in processing (async work in goroutine).
+	if workflow.Status() != domain.WorkflowProcessing {
+		t.Errorf("expected status %s, got %s", domain.WorkflowProcessing, workflow.Status())
 	}
 
-	if !strings.Contains(workflow.FailureReason(), "create synthesis leaf") {
-		t.Errorf("expected failure reason to mention 'create synthesis leaf', got %q", workflow.FailureReason())
+	// Wait for the background goroutine to finish.
+	bc.wait(t)
+
+	if repo.updatedWorkflow.Status() != domain.WorkflowFailed {
+		t.Errorf("expected updated workflow status %s, got %s", domain.WorkflowFailed, repo.updatedWorkflow.Status())
+	}
+
+	if !strings.Contains(repo.updatedWorkflow.FailureReason(), "create synthesis leaf") {
+		t.Errorf("expected failure reason to mention 'create synthesis leaf', got %q", repo.updatedWorkflow.FailureReason())
 	}
 }
 
@@ -687,7 +736,7 @@ func TestStartSynthesis_SourceLeavesNotFound_WorkflowMarkedFailed(t *testing.T) 
 	wsMembers := &stubWSMembers{}
 	pub := &stubPublisher{}
 
-	svc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
+	svc, bc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
 
 	ctx := testCtx("user_test")
 	wsID := types.WorkspaceIDFrom("ws_test")
@@ -701,12 +750,20 @@ func TestStartSynthesis_SourceLeavesNotFound_WorkflowMarkedFailed(t *testing.T) 
 		t.Fatalf("expected no hard error (graceful failure), got: %v", err)
 	}
 
-	if workflow.Status() != domain.WorkflowFailed {
-		t.Errorf("expected status %s, got %s", domain.WorkflowFailed, workflow.Status())
+	// Returned workflow should be in processing (async work in goroutine).
+	if workflow.Status() != domain.WorkflowProcessing {
+		t.Errorf("expected status %s, got %s", domain.WorkflowProcessing, workflow.Status())
 	}
 
-	if !strings.Contains(workflow.FailureReason(), "expected 2 source leaves, found 1") {
-		t.Errorf("expected failure reason about leaf count mismatch, got %q", workflow.FailureReason())
+	// Wait for the background goroutine to finish.
+	bc.wait(t)
+
+	if repo.updatedWorkflow.Status() != domain.WorkflowFailed {
+		t.Errorf("expected updated workflow status %s, got %s", domain.WorkflowFailed, repo.updatedWorkflow.Status())
+	}
+
+	if !strings.Contains(repo.updatedWorkflow.FailureReason(), "expected 2 source leaves, found 1") {
+		t.Errorf("expected failure reason about leaf count mismatch, got %q", repo.updatedWorkflow.FailureReason())
 	}
 
 	// LLM should NOT have been called.
@@ -728,7 +785,7 @@ func TestStartSynthesis_SourceLeafReadError_WorkflowMarkedFailed(t *testing.T) {
 	wsMembers := &stubWSMembers{}
 	pub := &stubPublisher{}
 
-	svc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
+	svc, bc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
 
 	ctx := testCtx("user_test")
 	wsID := types.WorkspaceIDFrom("ws_test")
@@ -742,12 +799,20 @@ func TestStartSynthesis_SourceLeafReadError_WorkflowMarkedFailed(t *testing.T) {
 		t.Fatalf("expected no hard error (graceful failure), got: %v", err)
 	}
 
-	if workflow.Status() != domain.WorkflowFailed {
-		t.Errorf("expected status %s, got %s", domain.WorkflowFailed, workflow.Status())
+	// Returned workflow should be in processing (async work in goroutine).
+	if workflow.Status() != domain.WorkflowProcessing {
+		t.Errorf("expected status %s, got %s", domain.WorkflowProcessing, workflow.Status())
 	}
 
-	if !strings.Contains(workflow.FailureReason(), "load source leaves") {
-		t.Errorf("expected failure reason about loading source leaves, got %q", workflow.FailureReason())
+	// Wait for the background goroutine to finish.
+	bc.wait(t)
+
+	if repo.updatedWorkflow.Status() != domain.WorkflowFailed {
+		t.Errorf("expected updated workflow status %s, got %s", domain.WorkflowFailed, repo.updatedWorkflow.Status())
+	}
+
+	if !strings.Contains(repo.updatedWorkflow.FailureReason(), "load source leaves") {
+		t.Errorf("expected failure reason about loading source leaves, got %q", repo.updatedWorkflow.FailureReason())
 	}
 }
 
@@ -768,7 +833,7 @@ func TestStartSynthesis_SeedReadError_WorkflowMarkedFailed(t *testing.T) {
 	wsMembers := &stubWSMembers{}
 	pub := &stubPublisher{}
 
-	svc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
+	svc, bc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
 
 	ctx := testCtx("user_test")
 	wsID := types.WorkspaceIDFrom("ws_test")
@@ -782,12 +847,20 @@ func TestStartSynthesis_SeedReadError_WorkflowMarkedFailed(t *testing.T) {
 		t.Fatalf("expected no hard error (graceful failure), got: %v", err)
 	}
 
-	if workflow.Status() != domain.WorkflowFailed {
-		t.Errorf("expected status %s, got %s", domain.WorkflowFailed, workflow.Status())
+	// Returned workflow should be in processing (async work in goroutine).
+	if workflow.Status() != domain.WorkflowProcessing {
+		t.Errorf("expected status %s, got %s", domain.WorkflowProcessing, workflow.Status())
 	}
 
-	if !strings.Contains(workflow.FailureReason(), "load seed") {
-		t.Errorf("expected failure reason about loading seed, got %q", workflow.FailureReason())
+	// Wait for the background goroutine to finish.
+	bc.wait(t)
+
+	if repo.updatedWorkflow.Status() != domain.WorkflowFailed {
+		t.Errorf("expected updated workflow status %s, got %s", domain.WorkflowFailed, repo.updatedWorkflow.Status())
+	}
+
+	if !strings.Contains(repo.updatedWorkflow.FailureReason(), "load seed") {
+		t.Errorf("expected failure reason about loading seed, got %q", repo.updatedWorkflow.FailureReason())
 	}
 }
 
@@ -812,7 +885,7 @@ func TestStartSynthesis_LLMReturnsInvalidJSON_WorkflowMarkedFailed(t *testing.T)
 	wsMembers := &stubWSMembers{}
 	pub := &stubPublisher{}
 
-	svc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
+	svc, bc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
 
 	ctx := testCtx("user_test")
 	wsID := types.WorkspaceIDFrom("ws_test")
@@ -826,12 +899,20 @@ func TestStartSynthesis_LLMReturnsInvalidJSON_WorkflowMarkedFailed(t *testing.T)
 		t.Fatalf("expected no hard error (graceful failure), got: %v", err)
 	}
 
-	if workflow.Status() != domain.WorkflowFailed {
-		t.Errorf("expected status %s, got %s", domain.WorkflowFailed, workflow.Status())
+	// Returned workflow should be in processing (async work in goroutine).
+	if workflow.Status() != domain.WorkflowProcessing {
+		t.Errorf("expected status %s, got %s", domain.WorkflowProcessing, workflow.Status())
 	}
 
-	if !strings.Contains(workflow.FailureReason(), "parse llm response") {
-		t.Errorf("expected failure reason about parsing LLM response, got %q", workflow.FailureReason())
+	// Wait for the background goroutine to finish.
+	bc.wait(t)
+
+	if repo.updatedWorkflow.Status() != domain.WorkflowFailed {
+		t.Errorf("expected updated workflow status %s, got %s", domain.WorkflowFailed, repo.updatedWorkflow.Status())
+	}
+
+	if !strings.Contains(repo.updatedWorkflow.FailureReason(), "parse llm response") {
+		t.Errorf("expected failure reason about parsing LLM response, got %q", repo.updatedWorkflow.FailureReason())
 	}
 }
 
@@ -844,7 +925,7 @@ func TestStartSynthesis_NoAuthClaims_ReturnsError(t *testing.T) {
 	wsMembers := &stubWSMembers{}
 	pub := &stubPublisher{}
 
-	svc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
+	svc, _ := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
 
 	ctx := testCtxNoAuth()
 	wsID := types.WorkspaceIDFrom("ws_test")
@@ -876,7 +957,7 @@ func TestStartSynthesis_NonMember_ReturnsUnauthorized(t *testing.T) {
 	}
 	pub := &stubPublisher{}
 
-	svc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
+	svc, _ := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
 
 	ctx := testCtx("user_outsider")
 	wsID := types.WorkspaceIDFrom("ws_test")
@@ -904,7 +985,7 @@ func TestStartSynthesis_TooFewLeaves_ReturnsError(t *testing.T) {
 	wsMembers := &stubWSMembers{}
 	pub := &stubPublisher{}
 
-	svc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
+	svc, _ := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
 
 	ctx := testCtx("user_test")
 	wsID := types.WorkspaceIDFrom("ws_test")
@@ -935,7 +1016,7 @@ func TestStartSynthesis_RepoCreateFailure_ReturnsError(t *testing.T) {
 	wsMembers := &stubWSMembers{}
 	pub := &stubPublisher{}
 
-	svc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
+	svc, _ := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
 
 	ctx := testCtx("user_test")
 	wsID := types.WorkspaceIDFrom("ws_test")
@@ -971,7 +1052,7 @@ func TestStartSynthesis_PublishesStartedEvent(t *testing.T) {
 	wsMembers := &stubWSMembers{}
 	pub := &stubPublisher{}
 
-	svc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
+	svc, _ := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
 
 	ctx := testCtx("user_test")
 	wsID := types.WorkspaceIDFrom("ws_test")
@@ -985,7 +1066,7 @@ func TestStartSynthesis_PublishesStartedEvent(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify the started event was published first.
+	// Verify the started event was published first (synchronous, before goroutine).
 	if len(pub.published) < 1 {
 		t.Fatal("expected at least 1 published event")
 	}
@@ -1026,7 +1107,7 @@ func TestStartSynthesis_SuccessPublishesThreeEvents(t *testing.T) {
 	wsMembers := &stubWSMembers{}
 	pub := &stubPublisher{}
 
-	svc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
+	svc, bc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
 
 	ctx := testCtx("user_test")
 	wsID := types.WorkspaceIDFrom("ws_test")
@@ -1039,6 +1120,9 @@ func TestStartSynthesis_SuccessPublishesThreeEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+
+	// Wait for the background goroutine to finish.
+	bc.wait(t)
 
 	if len(pub.published) != 3 {
 		t.Fatalf("expected 3 events, got %d", len(pub.published))
@@ -1078,7 +1162,7 @@ func TestStartSynthesis_LLMCalledWithCorrectPrompt(t *testing.T) {
 	wsMembers := &stubWSMembers{}
 	pub := &stubPublisher{}
 
-	svc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
+	svc, bc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
 
 	ctx := testCtx("user_test")
 	wsID := types.WorkspaceIDFrom("ws_test")
@@ -1091,6 +1175,9 @@ func TestStartSynthesis_LLMCalledWithCorrectPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+
+	// Wait for the background goroutine to finish.
+	bc.wait(t)
 
 	// Verify LLM received 2 messages: system prompt + user prompt.
 	if len(llmProv.lastRequest.Messages) != 2 {
@@ -1137,7 +1224,7 @@ func TestFindByWorkspace_Success(t *testing.T) {
 	wsMembers := &stubWSMembers{}
 	pub := &stubPublisher{}
 
-	svc := newTestService(repo, &stubLLMProvider{}, &stubSourceLeafReader{}, &stubSeedReader{}, &stubLeafCreator{}, wsMembers, pub)
+	svc, _ := newTestService(repo, &stubLLMProvider{}, &stubSourceLeafReader{}, &stubSeedReader{}, &stubLeafCreator{}, wsMembers, pub)
 
 	ctx := testCtx("user_test")
 	workflows, err := svc.FindByWorkspace(ctx, wsID)
@@ -1154,7 +1241,7 @@ func TestFindByWorkspace_NoAuth_ReturnsError(t *testing.T) {
 	wsMembers := &stubWSMembers{}
 	pub := &stubPublisher{}
 
-	svc := newTestService(repo, &stubLLMProvider{}, &stubSourceLeafReader{}, &stubSeedReader{}, &stubLeafCreator{}, wsMembers, pub)
+	svc, _ := newTestService(repo, &stubLLMProvider{}, &stubSourceLeafReader{}, &stubSeedReader{}, &stubLeafCreator{}, wsMembers, pub)
 
 	ctx := testCtxNoAuth()
 	wsID := types.WorkspaceIDFrom("ws_test")
@@ -1174,7 +1261,7 @@ func TestFindByWorkspace_NonMember_ReturnsUnauthorized(t *testing.T) {
 	}
 	pub := &stubPublisher{}
 
-	svc := newTestService(repo, &stubLLMProvider{}, &stubSourceLeafReader{}, &stubSeedReader{}, &stubLeafCreator{}, wsMembers, pub)
+	svc, _ := newTestService(repo, &stubLLMProvider{}, &stubSourceLeafReader{}, &stubSeedReader{}, &stubLeafCreator{}, wsMembers, pub)
 
 	ctx := testCtx("user_outsider")
 	wsID := types.WorkspaceIDFrom("ws_test")
@@ -1210,7 +1297,7 @@ func TestFailSynthesis_Success(t *testing.T) {
 	}
 	pub := &stubPublisher{}
 
-	svc := newTestService(repo, &stubLLMProvider{}, &stubSourceLeafReader{}, &stubSeedReader{}, &stubLeafCreator{}, &stubWSMembers{}, pub)
+	svc, _ := newTestService(repo, &stubLLMProvider{}, &stubSourceLeafReader{}, &stubSeedReader{}, &stubLeafCreator{}, &stubWSMembers{}, pub)
 
 	err = svc.FailSynthesis(context.Background(), workflow.ID(), "manual failure")
 	if err != nil {
@@ -1230,7 +1317,7 @@ func TestFailSynthesis_NotFound_ReturnsError(t *testing.T) {
 	}
 	pub := &stubPublisher{}
 
-	svc := newTestService(repo, &stubLLMProvider{}, &stubSourceLeafReader{}, &stubSeedReader{}, &stubLeafCreator{}, &stubWSMembers{}, pub)
+	svc, _ := newTestService(repo, &stubLLMProvider{}, &stubSourceLeafReader{}, &stubSeedReader{}, &stubLeafCreator{}, &stubWSMembers{}, pub)
 
 	err := svc.FailSynthesis(context.Background(), domain.SynthesisIDFrom("syn_nonexistent"), "reason")
 	if err == nil {
@@ -1259,7 +1346,7 @@ func TestCompleteSynthesis_Success(t *testing.T) {
 	}
 	pub := &stubPublisher{}
 
-	svc := newTestService(repo, &stubLLMProvider{}, &stubSourceLeafReader{}, &stubSeedReader{}, &stubLeafCreator{}, &stubWSMembers{}, pub)
+	svc, _ := newTestService(repo, &stubLLMProvider{}, &stubSourceLeafReader{}, &stubSeedReader{}, &stubLeafCreator{}, &stubWSMembers{}, pub)
 
 	resultLeafID := types.LeafIDFrom("leaf_result")
 	completed, err := svc.CompleteSynthesis(context.Background(), workflow.ID(), resultLeafID)
@@ -1301,7 +1388,7 @@ func TestCompleteSynthesis_NotProcessing_ReturnsError(t *testing.T) {
 	}
 	pub := &stubPublisher{}
 
-	svc := newTestService(repo, &stubLLMProvider{}, &stubSourceLeafReader{}, &stubSeedReader{}, &stubLeafCreator{}, &stubWSMembers{}, pub)
+	svc, _ := newTestService(repo, &stubLLMProvider{}, &stubSourceLeafReader{}, &stubSeedReader{}, &stubLeafCreator{}, &stubWSMembers{}, pub)
 
 	_, err = svc.CompleteSynthesis(context.Background(), workflow.ID(), types.LeafIDFrom("leaf_result"))
 	if err == nil {
@@ -1328,7 +1415,7 @@ func TestCompleteSynthesis_ZeroResultLeafID_ReturnsError(t *testing.T) {
 	}
 	pub := &stubPublisher{}
 
-	svc := newTestService(repo, &stubLLMProvider{}, &stubSourceLeafReader{}, &stubSeedReader{}, &stubLeafCreator{}, &stubWSMembers{}, pub)
+	svc, _ := newTestService(repo, &stubLLMProvider{}, &stubSourceLeafReader{}, &stubSeedReader{}, &stubLeafCreator{}, &stubWSMembers{}, pub)
 
 	// Pass a zero-value LeafID.
 	_, err = svc.CompleteSynthesis(context.Background(), workflow.ID(), types.LeafID{})
@@ -1360,7 +1447,7 @@ func TestStartSynthesis_SourceAttributionPassedToLeafCreator(t *testing.T) {
 	wsMembers := &stubWSMembers{}
 	pub := &stubPublisher{}
 
-	svc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
+	svc, bc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
 
 	ctx := testCtx("user_test")
 	wsID := types.WorkspaceIDFrom("ws_test")
@@ -1373,6 +1460,9 @@ func TestStartSynthesis_SourceAttributionPassedToLeafCreator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+
+	// Wait for the background goroutine to finish.
+	bc.wait(t)
 
 	params := leafCreator.lastParams
 	if len(params.Sources) != 2 {
@@ -1421,7 +1511,7 @@ func TestStartSynthesis_SeedIDDerivedFromFirstSourceLeaf(t *testing.T) {
 	wsMembers := &stubWSMembers{}
 	pub := &stubPublisher{}
 
-	svc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
+	svc, bc := newTestService(repo, llmProv, leafReader, seedReader, leafCreator, wsMembers, pub)
 
 	ctx := testCtx("user_test")
 	wsID := types.WorkspaceIDFrom("ws_test")
@@ -1434,6 +1524,9 @@ func TestStartSynthesis_SeedIDDerivedFromFirstSourceLeaf(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+
+	// Wait for the background goroutine to finish.
+	bc.wait(t)
 
 	// Seed ID should be derived from the first source leaf.
 	if seedLookupID.String() != customSeedID.String() {

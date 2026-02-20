@@ -54,7 +54,7 @@ func (h *Handler) handleStartSynthesis(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	types.WriteCreated(w, SynthesisFromDomain(sw))
+	types.WriteAccepted(w, SynthesisFromDomain(sw))
 }
 
 func (h *Handler) handleComplete(w http.ResponseWriter, r *http.Request) {

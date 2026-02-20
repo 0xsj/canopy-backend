@@ -18,10 +18,10 @@ type Provider struct {
 }
 
 // Wire creates the session bounded context from infrastructure dependencies.
-func Wire(db *database.DB, assembler domain.ContextAssembler, llmResolver llm.ProviderResolver, wsMembers service.WorkspaceMemberReader, pub events.Publisher, log logger.Logger) *Provider {
+func Wire(db *database.DB, assembler domain.ContextAssembler, llmResolver llm.ProviderResolver, broadcaster llm.StreamBroadcaster, wsMembers service.WorkspaceMemberReader, pub events.Publisher, log logger.Logger) *Provider {
 	dbtx := db.DBTX()
 	repo := postgres.NewSessionRepository(dbtx)
-	svc := service.New(repo, assembler, llmResolver, wsMembers, pub, log)
+	svc := service.New(repo, assembler, llmResolver, broadcaster, wsMembers, pub, log)
 	h := handler.NewHandler(svc, log)
 	return &Provider{Service: svc, Handler: h}
 }

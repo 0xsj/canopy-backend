@@ -79,6 +79,7 @@ type LeafSource struct {
 type Service struct {
 	repo        domain.SynthesisRepository
 	llm         llm.ProviderResolver
+	broadcaster llm.StreamBroadcaster
 	leaves      SourceLeafReader
 	seeds       SeedReader
 	leafCreator SynthesisLeafCreator
@@ -91,6 +92,7 @@ type Service struct {
 func New(
 	repo domain.SynthesisRepository,
 	llmResolver llm.ProviderResolver,
+	broadcaster llm.StreamBroadcaster,
 	leaves SourceLeafReader,
 	seeds SeedReader,
 	leafCreator SynthesisLeafCreator,
@@ -101,6 +103,7 @@ func New(
 	return &Service{
 		repo:        repo,
 		llm:         llmResolver,
+		broadcaster: broadcaster,
 		leaves:      leaves,
 		seeds:       seeds,
 		leafCreator: leafCreator,
@@ -110,9 +113,9 @@ func New(
 	}
 }
 
-// StartSynthesis creates a synthesis workflow, calls the LLM to merge source
-// leaves, creates the result leaf, and completes the workflow. If the LLM call
-// or leaf creation fails, the workflow is marked as failed and returned.
+// StartSynthesis creates a synthesis workflow, publishes the started event, then
+// spawns a background goroutine to stream the LLM call and create the result leaf.
+// Returns the workflow immediately (status: "in_progress").
 func (s *Service) StartSynthesis(ctx context.Context, workspaceID types.WorkspaceID, sourceLeafIDs []types.LeafID) (domain.SynthesisWorkflow, error) {
 	const op = "synthesis: start"
 
@@ -152,52 +155,104 @@ func (s *Service) StartSynthesis(ctx context.Context, workspaceID types.Workspac
 		logger.String("workspace_id", workspaceID.String()),
 	)
 
+	// Spawn background goroutine for LLM work.
+	go s.runSynthesisStream(context.WithoutCancel(ctx), workflow, workspaceID, callerID, sourceLeafIDs, leafIDStrs)
+
+	return workflow, nil
+}
+
+// runSynthesisStream loads sources, streams the LLM call, parses the result,
+// creates the synthesis leaf, and completes the workflow. All stream events
+// are sent via the broadcaster.
+func (s *Service) runSynthesisStream(
+	ctx context.Context,
+	workflow domain.SynthesisWorkflow,
+	workspaceID types.WorkspaceID,
+	callerID types.UserID,
+	sourceLeafIDs []types.LeafID,
+	leafIDStrs []string,
+) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+
+	wsID := workspaceID.String()
+	streamID := workflow.ID().String()
+
+	_ = s.broadcaster.Send(wsID, llm.StreamMessage{
+		Type:     "stream.start",
+		StreamID: streamID,
+	})
+
 	// Load source leaves.
 	sourceLeaves, err := s.leaves.FindByIDs(ctx, sourceLeafIDs)
 	if err != nil {
-		s.failWorkflow(ctx, &workflow, fmt.Sprintf("load source leaves: %v", err))
-		return workflow, nil
+		s.failWorkflowAndNotify(ctx, &workflow, streamID, wsID, fmt.Sprintf("load source leaves: %v", err))
+		return
 	}
-
 	if len(sourceLeaves) != len(sourceLeafIDs) {
-		s.failWorkflow(ctx, &workflow, fmt.Sprintf("expected %d source leaves, found %d", len(sourceLeafIDs), len(sourceLeaves)))
-		return workflow, nil
+		s.failWorkflowAndNotify(ctx, &workflow, streamID, wsID, fmt.Sprintf("expected %d source leaves, found %d", len(sourceLeafIDs), len(sourceLeaves)))
+		return
 	}
 
-	// Derive seed from first source leaf.
 	seedID := sourceLeaves[0].SeedID
 
 	seedInfo, err := s.seeds.FindByID(ctx, seedID)
 	if err != nil {
-		s.failWorkflow(ctx, &workflow, fmt.Sprintf("load seed: %v", err))
-		return workflow, nil
+		s.failWorkflowAndNotify(ctx, &workflow, streamID, wsID, fmt.Sprintf("load seed: %v", err))
+		return
 	}
 
-	// Build LLM prompt and call.
 	prompt := buildSynthesisLLMPrompt(seedInfo, sourceLeaves)
 
 	provider, err := s.llm.Resolve(ctx, workspaceID)
 	if err != nil {
-		s.failWorkflow(ctx, &workflow, fmt.Sprintf("resolve llm provider: %v", err))
-		return workflow, nil
+		s.failWorkflowAndNotify(ctx, &workflow, streamID, wsID, fmt.Sprintf("resolve llm provider: %v", err))
+		return
 	}
 
-	resp, err := provider.ChatCompletion(ctx, llm.ChatRequest{
+	req := llm.ChatRequest{
 		Messages: []llm.Message{
 			{Role: "system", Content: prompt},
 			{Role: "user", Content: "Please synthesize these ideas now."},
 		},
-	})
-	if err != nil {
-		s.failWorkflow(ctx, &workflow, fmt.Sprintf("llm call: %v", err))
-		return workflow, nil
 	}
 
-	// Parse structured response.
-	result, err := parseSynthesisResponse(resp.Content)
+	var accumulated strings.Builder
+
+	// Try streaming; fall back to sync.
+	sp, ok := provider.(llm.StreamProvider)
+	if ok {
+		err = sp.ChatCompletionStream(ctx, req, func(chunk llm.StreamChunk) error {
+			if chunk.Done {
+				return nil
+			}
+			accumulated.WriteString(chunk.Delta)
+			return s.broadcaster.Send(wsID, llm.StreamMessage{
+				Type:     "stream.chunk",
+				StreamID: streamID,
+				Delta:    chunk.Delta,
+			})
+		})
+	} else {
+		var resp llm.ChatResponse
+		resp, err = provider.ChatCompletion(ctx, req)
+		if err == nil {
+			accumulated.WriteString(resp.Content)
+		}
+	}
+
 	if err != nil {
-		s.failWorkflow(ctx, &workflow, fmt.Sprintf("parse llm response: %v", err))
-		return workflow, nil
+		s.failWorkflowAndNotify(ctx, &workflow, streamID, wsID, fmt.Sprintf("llm call: %v", err))
+		return
+	}
+
+	content := accumulated.String()
+
+	// Parse structured response.
+	result, err := parseSynthesisResponse(content)
+	if err != nil {
+		s.failWorkflowAndNotify(ctx, &workflow, streamID, wsID, fmt.Sprintf("parse llm response: %v", err))
+		return
 	}
 
 	// Build source attribution.
@@ -206,7 +261,7 @@ func (s *Service) StartSynthesis(ctx context.Context, workspaceID types.Workspac
 		sources[i] = LeafSource{LeafID: leaf.ID.String(), Title: leaf.Title}
 	}
 
-	// Create synthesis leaf via cross-context adapter.
+	// Create synthesis leaf.
 	leafID, err := s.leafCreator.Create(ctx, SynthesisLeafParams{
 		WorkspaceID:   workspaceID,
 		SeedID:        seedID,
@@ -219,40 +274,55 @@ func (s *Service) StartSynthesis(ctx context.Context, workspaceID types.Workspac
 		Sources:       sources,
 	})
 	if err != nil {
-		s.failWorkflow(ctx, &workflow, fmt.Sprintf("create synthesis leaf: %v", err))
-		return workflow, nil
+		s.failWorkflowAndNotify(ctx, &workflow, streamID, wsID, fmt.Sprintf("create synthesis leaf: %v", err))
+		return
 	}
 
 	// Complete workflow.
 	if err := workflow.Complete(leafID); err != nil {
-		return domain.SynthesisWorkflow{}, canopyerr.Wrap(err, op)
+		s.log.Error("synthesis: complete workflow failed", logger.Err(err))
+		return
 	}
-
 	if err := s.repo.Update(ctx, workflow); err != nil {
-		return domain.SynthesisWorkflow{}, canopyerr.Wrap(err, op)
+		s.log.Error("synthesis: persist completed workflow failed", logger.Err(err))
+		return
 	}
 
-	s.publish(ctx, domain.SubjectSynthesisCompleted, workspaceID.String(), domain.SynthesisCompletedData{
-		SynthesisID:  workflow.ID().String(),
-		WorkspaceID:  workspaceID.String(),
+	s.publish(ctx, domain.SubjectSynthesisCompleted, wsID, domain.SynthesisCompletedData{
+		SynthesisID:  streamID,
+		WorkspaceID:  wsID,
 		ResultLeafID: leafID.String(),
 		Timestamp:    time.Now().UTC(),
 	})
 
-	s.publish(ctx, domain.SubjectSynthesisLeafCreated, workspaceID.String(), domain.SynthesisLeafCreatedData{
+	s.publish(ctx, domain.SubjectSynthesisLeafCreated, wsID, domain.SynthesisLeafCreatedData{
 		LeafID:        leafID.String(),
-		WorkspaceID:   workspaceID.String(),
+		WorkspaceID:   wsID,
 		SourceLeafIDs: leafIDStrs,
 		InitiatorID:   callerID.String(),
 		Timestamp:     time.Now().UTC(),
 	})
 
+	_ = s.broadcaster.Send(wsID, llm.StreamMessage{
+		Type:     "stream.end",
+		StreamID: streamID,
+		Content:  content,
+	})
+
 	s.log.Info("synthesis completed",
-		logger.String("synthesis_id", workflow.ID().String()),
+		logger.String("synthesis_id", streamID),
 		logger.String("result_leaf_id", leafID.String()),
 	)
+}
 
-	return workflow, nil
+// failWorkflowAndNotify fails the workflow, persists it, and sends a stream.error.
+func (s *Service) failWorkflowAndNotify(ctx context.Context, workflow *domain.SynthesisWorkflow, streamID, wsID, reason string) {
+	s.failWorkflow(ctx, workflow, reason)
+	_ = s.broadcaster.Send(wsID, llm.StreamMessage{
+		Type:     "stream.error",
+		StreamID: streamID,
+		Error:    reason,
+	})
 }
 
 // CompleteSynthesis marks a workflow as completed with the resulting leaf.

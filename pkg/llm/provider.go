@@ -42,3 +42,21 @@ type Usage struct {
 	InputTokens  int
 	OutputTokens int
 }
+
+// StreamChunk carries a single token or completion signal from a streaming LLM call.
+type StreamChunk struct {
+	Delta string
+	Done  bool
+	Usage *Usage // non-nil only when Done
+}
+
+// StreamHandler is called for each chunk during a streaming LLM call.
+type StreamHandler func(chunk StreamChunk) error
+
+// StreamProvider is an optional capability for providers that support streaming.
+// Services type-assert Provider to StreamProvider; non-streaming providers
+// fall back to synchronous ChatCompletion automatically.
+type StreamProvider interface {
+	Provider
+	ChatCompletionStream(ctx context.Context, req ChatRequest, handler StreamHandler) error
+}

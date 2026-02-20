@@ -20,6 +20,7 @@ type Provider struct {
 func Wire(
 	db *database.DB,
 	llmResolver llm.ProviderResolver,
+	broadcaster llm.StreamBroadcaster,
 	leaves service.SourceLeafReader,
 	seeds service.SeedReader,
 	leafCreator service.SynthesisLeafCreator,
@@ -29,7 +30,7 @@ func Wire(
 ) *Provider {
 	dbtx := db.DBTX()
 	repo := postgres.NewSynthesisRepository(dbtx)
-	svc := service.New(repo, llmResolver, leaves, seeds, leafCreator, wsMembers, pub, log)
+	svc := service.New(repo, llmResolver, broadcaster, leaves, seeds, leafCreator, wsMembers, pub, log)
 	h := handler.NewHandler(svc, log)
 	return &Provider{Service: svc, Handler: h}
 }

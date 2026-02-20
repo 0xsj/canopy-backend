@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/0xsj/canopy-backend/internal/session/domain"
@@ -21,12 +22,13 @@ type WorkspaceMemberReader interface {
 
 // Service implements the session application logic.
 type Service struct {
-	sessions  domain.SessionRepository
-	assembler domain.ContextAssembler
-	llm       llm.ProviderResolver
-	wsMembers WorkspaceMemberReader
-	pub       events.Publisher
-	log       logger.Logger
+	sessions    domain.SessionRepository
+	assembler   domain.ContextAssembler
+	llm         llm.ProviderResolver
+	broadcaster llm.StreamBroadcaster
+	wsMembers   WorkspaceMemberReader
+	pub         events.Publisher
+	log         logger.Logger
 }
 
 // New creates a new session service.
@@ -34,17 +36,19 @@ func New(
 	sessions domain.SessionRepository,
 	assembler domain.ContextAssembler,
 	llmResolver llm.ProviderResolver,
+	broadcaster llm.StreamBroadcaster,
 	wsMembers WorkspaceMemberReader,
 	pub events.Publisher,
 	log logger.Logger,
 ) *Service {
 	return &Service{
-		sessions:  sessions,
-		assembler: assembler,
-		llm:       llmResolver,
-		wsMembers: wsMembers,
-		pub:       pub,
-		log:       log,
+		sessions:    sessions,
+		assembler:   assembler,
+		llm:         llmResolver,
+		broadcaster: broadcaster,
+		wsMembers:   wsMembers,
+		pub:         pub,
+		log:         log,
 	}
 }
 
@@ -206,6 +210,173 @@ func (s *Service) AddMessage(ctx context.Context, sessionID domain.SessionID, ms
 	)
 
 	return session, nil
+}
+
+// AddMessageStreaming appends a user message synchronously, then spawns a background
+// goroutine to stream the LLM response. Chunks are delivered via the StreamBroadcaster.
+// Returns the stream ID (session ID) immediately for the caller to track progress.
+func (s *Service) AddMessageStreaming(ctx context.Context, sessionID domain.SessionID, msg domain.Message) (string, error) {
+	const op = "session: add message streaming"
+
+	session, err := s.sessions.FindByID(ctx, sessionID)
+	if err != nil {
+		return "", canopyerr.Wrap(err, op)
+	}
+
+	if _, err := s.requireMember(ctx, session.WorkspaceID()); err != nil {
+		return "", canopyerr.Wrap(err, op)
+	}
+
+	// Idempotency guard (same as AddMessage).
+	if msgs := session.Messages(); len(msgs) > 0 {
+		for i := len(msgs) - 1; i >= 0 && i >= len(msgs)-2; i-- {
+			if msgs[i].Role == msg.Role && msgs[i].Content == msg.Content {
+				s.log.Info("duplicate message skipped (streaming)",
+					logger.String("session_id", sessionID.String()),
+					logger.String("role", msg.Role),
+				)
+				return sessionID.String(), nil
+			}
+		}
+	}
+
+	// Append the user message synchronously.
+	if err := session.AddMessage(msg); err != nil {
+		return "", canopyerr.Wrap(err, op)
+	}
+	if err := s.sessions.Update(ctx, session); err != nil {
+		return "", canopyerr.Wrap(err, op)
+	}
+
+	streamID := sessionID.String()
+
+	// Spawn background goroutine with detached context.
+	go s.runStream(context.WithoutCancel(ctx), session, streamID)
+
+	return streamID, nil
+}
+
+// runStream assembles context, resolves the LLM provider, and streams the response.
+// It sends stream.start/chunk/end/error messages via the broadcaster.
+func (s *Service) runStream(ctx context.Context, session domain.Session, streamID string) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+
+	wsID := session.WorkspaceID().String()
+
+	_ = s.broadcaster.Send(wsID, llm.StreamMessage{
+		Type:     "stream.start",
+		StreamID: streamID,
+	})
+
+	assembled, err := s.assembler.Assemble(ctx, session)
+	if err != nil {
+		s.log.Error("stream: context assembly failed", logger.Err(err))
+		_ = s.broadcaster.Send(wsID, llm.StreamMessage{
+			Type:     "stream.error",
+			StreamID: streamID,
+			Error:    "context assembly failed",
+		})
+		return
+	}
+
+	llmMessages := make([]llm.Message, len(assembled))
+	for i, m := range assembled {
+		llmMessages[i] = llm.Message{Role: m.Role, Content: m.Content}
+	}
+
+	provider, err := s.llm.Resolve(ctx, session.WorkspaceID())
+	if err != nil {
+		s.log.Error("stream: llm resolve failed", logger.Err(err))
+		_ = s.broadcaster.Send(wsID, llm.StreamMessage{
+			Type:     "stream.error",
+			StreamID: streamID,
+			Error:    "failed to resolve LLM provider",
+		})
+		return
+	}
+
+	req := llm.ChatRequest{Messages: llmMessages}
+
+	// Try streaming; fall back to sync if provider doesn't support it.
+	sp, ok := provider.(llm.StreamProvider)
+	if !ok {
+		s.runStreamFallback(ctx, provider, req, session, streamID, wsID)
+		return
+	}
+
+	var accumulated strings.Builder
+
+	err = sp.ChatCompletionStream(ctx, req, func(chunk llm.StreamChunk) error {
+		if chunk.Done {
+			return nil
+		}
+		accumulated.WriteString(chunk.Delta)
+		return s.broadcaster.Send(wsID, llm.StreamMessage{
+			Type:     "stream.chunk",
+			StreamID: streamID,
+			Delta:    chunk.Delta,
+		})
+	})
+	if err != nil {
+		s.log.Error("stream: llm stream failed", logger.Err(err))
+		_ = s.broadcaster.Send(wsID, llm.StreamMessage{
+			Type:     "stream.error",
+			StreamID: streamID,
+			Error:    "LLM streaming failed",
+		})
+		return
+	}
+
+	content := accumulated.String()
+	s.persistAssistantMessage(ctx, session, content, streamID)
+
+	_ = s.broadcaster.Send(wsID, llm.StreamMessage{
+		Type:     "stream.end",
+		StreamID: streamID,
+		Content:  content,
+	})
+}
+
+// runStreamFallback handles the case where the provider doesn't support streaming.
+// It calls ChatCompletion synchronously and sends the full response as a single stream.end.
+func (s *Service) runStreamFallback(ctx context.Context, provider llm.Provider, req llm.ChatRequest, session domain.Session, streamID, wsID string) {
+	resp, err := provider.ChatCompletion(ctx, req)
+	if err != nil {
+		s.log.Error("stream fallback: llm call failed", logger.Err(err))
+		_ = s.broadcaster.Send(wsID, llm.StreamMessage{
+			Type:     "stream.error",
+			StreamID: streamID,
+			Error:    "LLM call failed",
+		})
+		return
+	}
+
+	s.persistAssistantMessage(ctx, session, resp.Content, streamID)
+
+	_ = s.broadcaster.Send(wsID, llm.StreamMessage{
+		Type:     "stream.end",
+		StreamID: streamID,
+		Content:  resp.Content,
+	})
+}
+
+// persistAssistantMessage appends the assistant response to the session and persists it.
+func (s *Service) persistAssistantMessage(ctx context.Context, session domain.Session, content, streamID string) {
+	assistantMsg := domain.Message{Role: "assistant", Content: content}
+	if err := session.AddMessage(assistantMsg); err != nil {
+		s.log.Error("stream: failed to add assistant message",
+			logger.String("stream_id", streamID),
+			logger.Err(err),
+		)
+		return
+	}
+	if err := s.sessions.Update(ctx, session); err != nil {
+		s.log.Error("stream: failed to persist assistant message",
+			logger.String("stream_id", streamID),
+			logger.Err(err),
+		)
+	}
 }
 
 // Checkpoint transitions a session from active to the shaping phase.
