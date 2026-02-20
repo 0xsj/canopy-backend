@@ -137,11 +137,12 @@ func main() {
 
 	// ── 7. Providers ────────────────────────────────────────────
 	identityP := identity.Wire(db, cipher, pub, log)
-	ledgerP := ledger.Wire(db, log)
 	notifP := notification.Wire(db, []notifdomain.NotificationTransport{inapp.NewTransport()}, pub, log)
 
 	orgP := organization.Wire(db, &userReaderAdapter{repo: identityP.UserRepo}, pub, log)
 	wsP := workspace.Wire(db, orgP.MemberRepo, cipher, pub, log)
+
+	ledgerP := ledger.Wire(db, &ledgerMemberReaderAdapter{repo: wsP.MemberRepo}, log)
 
 	seedP := seed.Wire(db, wsP.MemberRepo, pub, log)
 	expP := exploration.Wire(db, wsP.MemberRepo, pub, log)

@@ -23,6 +23,7 @@ func NewHandler(svc *service.Service, log logger.Logger) *Handler {
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/admin/ledger/system", h.handleQuerySystem)
 	mux.HandleFunc("GET /api/v1/admin/ledger/domain", h.handleQueryDomain)
+	mux.HandleFunc("GET /api/v1/workspaces/{wsId}/activity", h.handleWorkspaceActivity)
 }
 
 func (h *Handler) handleQuerySystem(w http.ResponseWriter, r *http.Request) {
@@ -104,6 +105,23 @@ func (h *Handler) handleQueryDomain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	entries, err := h.svc.QueryDomain(r.Context(), filter)
+	if err != nil {
+		httpserver.WriteServiceError(w, h.log, err)
+		return
+	}
+
+	types.WriteOK(w, DomainEntriesFromDomain(entries))
+}
+
+func (h *Handler) handleWorkspaceActivity(w http.ResponseWriter, r *http.Request) {
+	wsID := types.WorkspaceIDFrom(r.PathValue("wsId"))
+
+	limit := httpserver.QueryInt(r, "limit", 50)
+	if limit > 200 {
+		limit = 200
+	}
+
+	entries, err := h.svc.QueryWorkspaceActivity(r.Context(), wsID, limit)
 	if err != nil {
 		httpserver.WriteServiceError(w, h.log, err)
 		return

@@ -143,6 +143,16 @@ func (a *synthesisLeafCreatorAdapter) Create(ctx context.Context, params synthsv
 	return leaf.ID(), nil
 }
 
+// ledgerMemberReaderAdapter wraps the workspace MemberRepository to satisfy
+// the ledger service's WorkspaceMemberReader cross-context port.
+type ledgerMemberReaderAdapter struct {
+	repo wsdomain.WorkspaceMemberRepository
+}
+
+func (a *ledgerMemberReaderAdapter) FindMember(ctx context.Context, workspaceID types.WorkspaceID, userID types.UserID) (wsdomain.WorkspaceMember, error) {
+	return a.repo.FindMember(ctx, workspaceID, userID)
+}
+
 // userLLMConfigReader is a cross-context read port for per-user LLM configs.
 type userLLMConfigReader interface {
 	FindByUser(ctx context.Context, userID types.UserID) (identitydomain.UserLLMConfig, error)

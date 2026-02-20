@@ -16,10 +16,10 @@ type Provider struct {
 
 // Wire creates the ledger bounded context from infrastructure dependencies.
 // Ledger is a sink — no event publisher needed.
-func Wire(db *database.DB, log logger.Logger) *Provider {
+func Wire(db *database.DB, wsMembers service.WorkspaceMemberReader, log logger.Logger) *Provider {
 	dbtx := db.DBTX()
 	repo := postgres.NewLedgerRepository(dbtx)
-	svc := service.New(repo, log)
+	svc := service.New(repo, wsMembers, log)
 	h := handler.NewHandler(svc, log)
 	return &Provider{Service: svc, Handler: h}
 }
