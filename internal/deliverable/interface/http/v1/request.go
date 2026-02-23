@@ -9,3 +9,8 @@ type CreateDraftRequest struct {
 type UpdateDeliverableRequest struct {
 	Content string `json:"content"`
 }
+
+type GenerateDeliverableRequest struct {
+	Format        string   `json:"format"`
+	SourceLeafIDs []string `json:"source_leaf_ids"`
+}

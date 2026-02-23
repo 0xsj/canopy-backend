@@ -16,6 +16,7 @@ type Provider struct {
 	Handler       *handler.Handler
 	MemberRepo    *postgres.WorkspaceMemberRepository // exposed: 7 contexts need WorkspaceMemberReader
 	LLMConfigRepo *postgres.LLMConfigRepository       // exposed: composition root needs it for resolver
+	WorkspaceRepo *postgres.WorkspaceRepository       // exposed: deliverable context needs config reader
 }
 
 // Wire creates the workspace bounded context from infrastructure dependencies.
@@ -36,5 +37,5 @@ func Wire(db *database.DB, orgMembers service.OrgMemberReader, encryptor service
 		pub, log,
 	)
 	h := handler.NewHandler(svc, log)
-	return &Provider{Service: svc, Handler: h, MemberRepo: memberRepo, LLMConfigRepo: llmConfigRepo}
+	return &Provider{Service: svc, Handler: h, MemberRepo: memberRepo, LLMConfigRepo: llmConfigRepo, WorkspaceRepo: wsRepo}
 }

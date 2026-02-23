@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	delsvc "github.com/0xsj/canopy-backend/internal/deliverable/service"
 	expdomain "github.com/0xsj/canopy-backend/internal/exploration/domain"
 	identitydomain "github.com/0xsj/canopy-backend/internal/identity/domain"
 	orgsvc "github.com/0xsj/canopy-backend/internal/organization/service"
@@ -156,6 +157,45 @@ func (a *synthesisLeafCreatorAdapter) Create(ctx context.Context, params synthsv
 	}
 
 	return leaf.ID(), nil
+}
+
+// deliverableLeafReaderAdapter wraps the exploration LeafRepository to satisfy
+// the deliverable service's SourceLeafReader cross-context port.
+type deliverableLeafReaderAdapter struct {
+	repo expdomain.LeafRepository
+}
+
+func (a *deliverableLeafReaderAdapter) FindByIDs(ctx context.Context, ids []types.LeafID) ([]delsvc.SourceLeaf, error) {
+	leaves, err := a.repo.FindByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]delsvc.SourceLeaf, len(leaves))
+	for i, l := range leaves {
+		out[i] = delsvc.SourceLeaf{
+			ID:            l.ID(),
+			Title:         l.Title(),
+			Summary:       l.Summary(),
+			KeyPoints:     l.KeyPoints(),
+			OpenQuestions: l.OpenQuestions(),
+			Tags:          l.Tags(),
+		}
+	}
+	return out, nil
+}
+
+// workspaceConfigReaderAdapter wraps the workspace WorkspaceRepository to satisfy
+// the deliverable service's WorkspaceConfigReader cross-context port.
+type workspaceConfigReaderAdapter struct {
+	repo wsdomain.WorkspaceRepository
+}
+
+func (a *workspaceConfigReaderAdapter) Configuration(ctx context.Context, workspaceID types.WorkspaceID) (map[string]any, error) {
+	ws, err := a.repo.FindByID(ctx, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	return ws.Configuration(), nil
 }
 
 // ledgerMemberReaderAdapter wraps the workspace MemberRepository to satisfy

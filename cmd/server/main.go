@@ -166,7 +166,11 @@ func main() {
 		},
 		wsP.MemberRepo, pub, log,
 	)
-	delP := deliverable.Wire(db, wsP.MemberRepo, pub, log)
+	delP := deliverable.Wire(db, resolver,
+		&deliverableLeafReaderAdapter{repo: expP.LeafRepo},
+		&workspaceConfigReaderAdapter{repo: wsP.WorkspaceRepo},
+		wsP.MemberRepo, pub, log,
+	)
 	convP := convergence.Wire(db, &leafWriterAdapter{repo: expP.LeafRepo}, wsP.MemberRepo, pub, log)
 
 	// ── 7b. Event subscribers ───────────────────────────────────

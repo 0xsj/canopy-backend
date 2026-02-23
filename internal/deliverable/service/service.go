@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/0xsj/canopy-backend/internal/deliverable/domain"
@@ -9,6 +11,7 @@ import (
 	"github.com/0xsj/canopy-backend/pkg/auth"
 	canopyerr "github.com/0xsj/canopy-backend/pkg/errors"
 	"github.com/0xsj/canopy-backend/pkg/events"
+	"github.com/0xsj/canopy-backend/pkg/llm"
 	"github.com/0xsj/canopy-backend/pkg/observability/logger"
 	"github.com/0xsj/canopy-backend/pkg/types"
 )
@@ -18,17 +21,63 @@ type WorkspaceMemberReader interface {
 	FindMember(ctx context.Context, workspaceID types.WorkspaceID, userID types.UserID) (wsdomain.WorkspaceMember, error)
 }
 
+// SourceLeafReader is a cross-context read port for exploration leaves.
+type SourceLeafReader interface {
+	FindByIDs(ctx context.Context, ids []types.LeafID) ([]SourceLeaf, error)
+}
+
+// SourceLeaf is a cross-context DTO carrying the leaf data needed for deliverable generation.
+type SourceLeaf struct {
+	ID            types.LeafID
+	Title         string
+	Summary       string
+	KeyPoints     []string
+	OpenQuestions []string
+	Tags          []string
+}
+
+// WorkspaceConfigReader is a cross-context read port for workspace configuration.
+type WorkspaceConfigReader interface {
+	Configuration(ctx context.Context, workspaceID types.WorkspaceID) (map[string]any, error)
+}
+
+const defaultDeliverableTemplate = `Structure the deliverable as follows:
+1. Executive Summary — one paragraph overview
+2. Key Findings — bullet points of the most important insights
+3. Analysis — detailed discussion organized by theme
+4. Open Questions — unresolved issues worth further exploration
+5. Recommendations — actionable next steps`
+
 // Service implements the deliverable application logic.
 type Service struct {
 	repo      domain.DeliverableRepository
 	wsMembers WorkspaceMemberReader
+	llm       llm.ProviderResolver
+	leaves    SourceLeafReader
+	wsConfig  WorkspaceConfigReader
 	pub       events.Publisher
 	log       logger.Logger
 }
 
 // New creates a new deliverable service.
-func New(repo domain.DeliverableRepository, wsMembers WorkspaceMemberReader, pub events.Publisher, log logger.Logger) *Service {
-	return &Service{repo: repo, wsMembers: wsMembers, pub: pub, log: log}
+func New(
+	repo domain.DeliverableRepository,
+	llm llm.ProviderResolver,
+	leaves SourceLeafReader,
+	wsConfig WorkspaceConfigReader,
+	wsMembers WorkspaceMemberReader,
+	pub events.Publisher,
+	log logger.Logger,
+) *Service {
+	return &Service{
+		repo:      repo,
+		llm:       llm,
+		leaves:    leaves,
+		wsConfig:  wsConfig,
+		wsMembers: wsMembers,
+		pub:       pub,
+		log:       log,
+	}
 }
 
 // CreateDraft creates a new deliverable draft from consensus-backed leaves.
@@ -165,6 +214,155 @@ func (s *Service) FindByWorkspace(ctx context.Context, workspaceID types.Workspa
 		return nil, canopyerr.Wrap(err, op)
 	}
 	return deliverables, nil
+}
+
+// GenerateDeliverable calls the LLM to synthesize source leaves into a coherent
+// deliverable document, then persists it as a new draft. The workspace's
+// deliverable_template setting (from the configuration JSONB column) is used
+// to shape the output format. If no template is configured, a sensible default
+// is used.
+func (s *Service) GenerateDeliverable(
+	ctx context.Context,
+	workspaceID types.WorkspaceID,
+	format domain.Format,
+	sourceLeafIDs []types.LeafID,
+) (domain.Deliverable, error) {
+	const op = "deliverable: generate"
+
+	if _, err := s.requireMember(ctx, workspaceID); err != nil {
+		return domain.Deliverable{}, canopyerr.Wrap(err, op)
+	}
+
+	if len(sourceLeafIDs) == 0 {
+		return domain.Deliverable{}, canopyerr.Wrap(
+			fmt.Errorf("deliverable: at least one source leaf is required"), op)
+	}
+
+	// Fetch source leaves.
+	leaves, err := s.leaves.FindByIDs(ctx, sourceLeafIDs)
+	if err != nil {
+		return domain.Deliverable{}, canopyerr.Wrap(err, op)
+	}
+	if len(leaves) == 0 {
+		return domain.Deliverable{}, canopyerr.Wrap(
+			fmt.Errorf("deliverable: no leaves found for the given IDs"), op)
+	}
+
+	// Read workspace template (best-effort — fall back to default).
+	template := defaultDeliverableTemplate
+	if s.wsConfig != nil {
+		cfg, cfgErr := s.wsConfig.Configuration(ctx, workspaceID)
+		if cfgErr == nil {
+			if tmpl, ok := cfg["deliverable_template"].(string); ok && tmpl != "" {
+				template = tmpl
+			}
+		}
+	}
+
+	// Build prompt and call LLM.
+	systemPrompt := buildDeliverablePrompt(leaves, template, string(format))
+	provider, err := s.llm.Resolve(ctx, workspaceID)
+	if err != nil {
+		return domain.Deliverable{}, canopyerr.Wrap(fmt.Errorf("resolve llm: %w", err), op)
+	}
+
+	resp, err := provider.ChatCompletion(ctx, llm.ChatRequest{
+		Messages: []llm.Message{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: "Generate the deliverable document now."},
+		},
+		Options: llm.Options{
+			MaxTokens:   4096,
+			Temperature: 0.4,
+		},
+	})
+	if err != nil {
+		return domain.Deliverable{}, canopyerr.Wrap(fmt.Errorf("llm call: %w", err), op)
+	}
+
+	content := strings.TrimSpace(resp.Content)
+	if content == "" {
+		return domain.Deliverable{}, canopyerr.Wrap(fmt.Errorf("llm returned empty content"), op)
+	}
+
+	// Persist as a new draft.
+	deliverable, err := domain.NewDeliverable(workspaceID, format, content, sourceLeafIDs)
+	if err != nil {
+		return domain.Deliverable{}, canopyerr.Wrap(err, op)
+	}
+
+	if err := s.repo.Create(ctx, deliverable); err != nil {
+		return domain.Deliverable{}, canopyerr.Wrap(err, op)
+	}
+
+	leafIDStrs := make([]string, len(sourceLeafIDs))
+	for i, id := range sourceLeafIDs {
+		leafIDStrs[i] = id.String()
+	}
+
+	s.publish(ctx, domain.SubjectDeliverableDraftCreated, workspaceID.String(), domain.DeliverableDraftCreatedData{
+		DeliverableID: deliverable.ID().String(),
+		WorkspaceID:   workspaceID.String(),
+		Format:        string(format),
+		SourceLeafIDs: leafIDStrs,
+		Timestamp:     time.Now().UTC(),
+	})
+
+	s.log.Info("deliverable generated via LLM",
+		logger.String("deliverable_id", deliverable.ID().String()),
+		logger.String("workspace_id", workspaceID.String()),
+		logger.Int("source_leaves", len(leaves)),
+	)
+
+	return deliverable, nil
+}
+
+// buildDeliverablePrompt constructs the system prompt for LLM-based deliverable generation.
+func buildDeliverablePrompt(leaves []SourceLeaf, template, format string) string {
+	var b strings.Builder
+
+	b.WriteString("You are generating a deliverable document in Canopy, a collaborative thinking platform.\n")
+	b.WriteString("Your job is to synthesize the source ideas below into a coherent, well-structured document.\n\n")
+
+	b.WriteString("## Output Format\n")
+	b.WriteString(fmt.Sprintf("Produce the document in **%s** format.\n\n", format))
+
+	b.WriteString("## Template Instructions\n")
+	b.WriteString(template)
+	b.WriteString("\n\n")
+
+	b.WriteString("## Source Ideas\n\n")
+	for i, leaf := range leaves {
+		b.WriteString(fmt.Sprintf("### Idea %d: %s\n", i+1, leaf.Title))
+		if leaf.Summary != "" {
+			b.WriteString(fmt.Sprintf("**Summary:** %s\n", leaf.Summary))
+		}
+		if len(leaf.KeyPoints) > 0 {
+			b.WriteString("**Key Points:**\n")
+			for _, kp := range leaf.KeyPoints {
+				b.WriteString(fmt.Sprintf("- %s\n", kp))
+			}
+		}
+		if len(leaf.OpenQuestions) > 0 {
+			b.WriteString("**Open Questions:**\n")
+			for _, q := range leaf.OpenQuestions {
+				b.WriteString(fmt.Sprintf("- %s\n", q))
+			}
+		}
+		if len(leaf.Tags) > 0 {
+			b.WriteString(fmt.Sprintf("**Tags:** %s\n", strings.Join(leaf.Tags, ", ")))
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("## Instructions\n")
+	b.WriteString("- Synthesize the ideas into a single coherent document following the template above.\n")
+	b.WriteString("- Do not simply concatenate the sources — find themes, connections, and insights.\n")
+	b.WriteString("- Attribute key ideas to their source when relevant.\n")
+	b.WriteString("- Write in a clear, professional tone.\n")
+	b.WriteString("- Output ONLY the document content. No meta-commentary.\n")
+
+	return b.String()
 }
 
 // --- Auth Helpers ---

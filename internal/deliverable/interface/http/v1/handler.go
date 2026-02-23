@@ -20,6 +20,7 @@ func NewHandler(svc *service.Service, log logger.Logger) *Handler {
 }
 
 func (h *Handler) Register(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/v1/workspaces/{wsId}/deliverables/generate", h.handleGenerate)
 	mux.HandleFunc("POST /api/v1/workspaces/{wsId}/deliverables", h.handleCreateDraft)
 	mux.HandleFunc("PATCH /api/v1/deliverables/{deliverableId}", h.handleUpdate)
 	mux.HandleFunc("POST /api/v1/deliverables/{deliverableId}/finalize", h.handleFinalize)
@@ -50,6 +51,42 @@ func (h *Handler) handleCreateDraft(w http.ResponseWriter, r *http.Request) {
 	}
 
 	deliverable, err := h.svc.CreateDraft(r.Context(), wsID, domain.Format(req.Format), req.Content, leafIDs)
+	if err != nil {
+		httpserver.WriteServiceError(w, h.log, err)
+		return
+	}
+
+	types.WriteCreated(w, DeliverableFromDomain(deliverable))
+}
+
+func (h *Handler) handleGenerate(w http.ResponseWriter, r *http.Request) {
+	wsID, err := types.ParseWorkspaceID(httpserver.PathParam(r, "wsId"))
+	if err != nil {
+		types.WriteError(w, http.StatusBadRequest, "invalid_id", err.Error())
+		return
+	}
+
+	var req GenerateDeliverableRequest
+	if !httpserver.DecodeBody(w, r, &req) {
+		return
+	}
+
+	format := req.Format
+	if format == "" {
+		format = "markdown"
+	}
+
+	leafIDs := make([]types.LeafID, len(req.SourceLeafIDs))
+	for i, raw := range req.SourceLeafIDs {
+		id, err := types.ParseLeafID(raw)
+		if err != nil {
+			types.WriteError(w, http.StatusBadRequest, "invalid_id", err.Error())
+			return
+		}
+		leafIDs[i] = id
+	}
+
+	deliverable, err := h.svc.GenerateDeliverable(r.Context(), wsID, domain.Format(format), leafIDs)
 	if err != nil {
 		httpserver.WriteServiceError(w, h.log, err)
 		return
