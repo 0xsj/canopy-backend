@@ -50,6 +50,7 @@ func main() {
 	var wsCfg websocket.Config
 	var llmCfg llm.Config
 	var cryptoCfg crypto.Config
+	var authCfg auth.Config
 
 	loader := config.NewLoader("CANOPY")
 	loader.Register("HTTP", &httpCfg)
@@ -58,6 +59,7 @@ func main() {
 	loader.Register("WS", &wsCfg)
 	loader.Register("LLM", &llmCfg)
 	loader.Register("CRYPTO", &cryptoCfg)
+	loader.Register("AUTH", &authCfg)
 
 	if err := loader.LoadAll(); err != nil {
 		fmt.Fprintf(os.Stderr, "fatal: %s\n", err)
@@ -201,10 +203,17 @@ func main() {
 	mux.Handle("GET /ws", websocket.Handler(hub, upgrader, log))
 
 	// API — all routes behind auth middleware.
-	validator := auth.NewStaticValidator(auth.Claims{
-		Subject: "dev_user",
-		Issuer:  "canopy-dev",
-	})
+	var validator auth.TokenValidator
+	if authCfg.IsDev() {
+		log.Warn("auth: using static dev validator — NOT FOR PRODUCTION")
+		validator = auth.NewStaticValidator(auth.Claims{
+			Subject: "dev_user",
+			Issuer:  "canopy-dev",
+		})
+	} else {
+		validator = auth.NewJWKSValidator(authCfg)
+		log.Info("auth: using JWKS validator", logger.String("issuer", authCfg.Issuer))
+	}
 
 	apiMux := http.NewServeMux()
 	identityP.Handler.Register(apiMux)
@@ -244,7 +253,7 @@ func main() {
 
 	log.Info("canopy server ready",
 		logger.String("addr", fmt.Sprintf(":%d", httpCfg.Port)),
-		logger.String("auth", "static (dev_user)"),
+		logger.String("auth", authCfg.Mode),
 	)
 
 	<-ctx.Done()

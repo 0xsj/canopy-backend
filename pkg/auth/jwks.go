@@ -45,11 +45,14 @@ func NewJWKSValidator(cfg Config) *JWKSValidator {
 }
 
 func (v *JWKSValidator) Validate(ctx context.Context, rawToken string) (Claims, error) {
-	token, err := jwt.Parse(rawToken, v.keyFunc(ctx),
+	opts := []jwt.ParserOption{
 		jwt.WithIssuer(v.issuer),
-		jwt.WithAudience(v.audience),
 		jwt.WithValidMethods([]string{"RS256"}),
-	)
+	}
+	if v.audience != "" {
+		opts = append(opts, jwt.WithAudience(v.audience))
+	}
+	token, err := jwt.Parse(rawToken, v.keyFunc(ctx), opts...)
 	if err != nil {
 		return Claims{}, fmt.Errorf("auth: validate token: %w", err)
 	}

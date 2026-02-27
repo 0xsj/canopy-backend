@@ -1,0 +1,23 @@
+# Binaries
+bin/
+*.exe
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Test artifacts
+coverage.out
+*.test
+
+# Dev config
+.env.dev
+
+# Git
+.git/
+.gitignore
+
+# Docs (not needed in image)
+README.md
