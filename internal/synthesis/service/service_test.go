@@ -149,8 +149,8 @@ func (s *stubLLMProvider) ChatCompletion(ctx context.Context, req llm.ChatReques
 }
 
 // Resolve implements llm.ProviderResolver, returning the stub as the provider.
-func (s *stubLLMProvider) Resolve(_ context.Context, _ types.WorkspaceID) (llm.Provider, error) {
-	return s, nil
+func (s *stubLLMProvider) Resolve(_ context.Context, _ types.WorkspaceID, _ llm.TaskType) (llm.Provider, string, error) {
+	return s, "test-model", nil
 }
 
 // stubWSMembers implements WorkspaceMemberReader for unit tests.

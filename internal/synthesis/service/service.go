@@ -204,13 +204,14 @@ func (s *Service) runSynthesisStream(
 
 	prompt := buildSynthesisLLMPrompt(seedInfo, sourceLeaves)
 
-	provider, err := s.llm.Resolve(ctx, workspaceID)
+	provider, model, err := s.llm.Resolve(ctx, workspaceID, llm.TaskSynthesis)
 	if err != nil {
 		s.failWorkflowAndNotify(ctx, &workflow, streamID, wsID, fmt.Sprintf("resolve llm provider: %v", err))
 		return
 	}
 
 	req := llm.ChatRequest{
+		Model: model,
 		Messages: []llm.Message{
 			{Role: "system", Content: prompt},
 			{Role: "user", Content: "Please synthesize these ideas now."},

@@ -216,11 +216,14 @@ type userLLMConfigReader interface {
 // llmProviderResolver resolves an LLM provider with hierarchy: User > Workspace > Server.
 // If the authenticated user has a personal LLM config, that is used. Otherwise, the
 // workspace config is tried. If neither exists, the server-wide fallback is returned.
+// The ModelRouter selects the concrete model based on the provider name and task type.
 type llmProviderResolver struct {
 	wsConfigs   wsdomain.LLMConfigRepository
 	userConfigs userLLMConfigReader
 	cipher      crypto.Encryptor
 	fallback    llm.Provider
+	router      *llm.ModelRouter
+	fallbackCfg llm.Config // server-wide config (for provider name + model fallback)
 	log         logger.Logger
 
 	mu    sync.RWMutex
@@ -232,6 +235,8 @@ func newLLMProviderResolver(
 	userConfigs userLLMConfigReader,
 	cipher crypto.Encryptor,
 	fallback llm.Provider,
+	fallbackCfg llm.Config,
+	router *llm.ModelRouter,
 	log logger.Logger,
 ) *llmProviderResolver {
 	return &llmProviderResolver{
@@ -239,12 +244,14 @@ func newLLMProviderResolver(
 		userConfigs: userConfigs,
 		cipher:      cipher,
 		fallback:    fallback,
+		fallbackCfg: fallbackCfg,
+		router:      router,
 		log:         log,
 		cache:       make(map[string]llm.Provider),
 	}
 }
 
-func (r *llmProviderResolver) Resolve(ctx context.Context, workspaceID types.WorkspaceID) (llm.Provider, error) {
+func (r *llmProviderResolver) Resolve(ctx context.Context, workspaceID types.WorkspaceID, task llm.TaskType) (llm.Provider, string, error) {
 	wsKey := workspaceID.String()
 
 	// Try user-level config first.
@@ -256,7 +263,10 @@ func (r *llmProviderResolver) Resolve(ctx context.Context, workspaceID types.Wor
 		r.mu.RLock()
 		if p, ok := r.cache[cacheKey]; ok {
 			r.mu.RUnlock()
-			return p, nil
+			userCfg, _ := r.userConfigs.FindByUser(ctx, userID)
+			providerName := string(userCfg.Provider())
+			model := r.router.Resolve(providerName, task, userCfg.Model())
+			return p, model, nil
 		}
 		r.mu.RUnlock()
 
@@ -265,16 +275,20 @@ func (r *llmProviderResolver) Resolve(ctx context.Context, workspaceID types.Wor
 			provider, cErr := r.createAndCache(ctx, cacheKey,
 				string(userCfg.Provider()), userCfg.Model(), userCfg.APIKeyEnc())
 			if cErr != nil {
-				return nil, fmt.Errorf("resolve llm provider (user): %w", cErr)
+				return nil, "", fmt.Errorf("resolve llm provider (user): %w", cErr)
 			}
+			providerName := string(userCfg.Provider())
+			model := r.router.Resolve(providerName, task, userCfg.Model())
 			r.log.Debug("user llm provider cached",
 				logger.String("user_id", userID.String()),
-				logger.String("provider", string(userCfg.Provider())),
+				logger.String("provider", providerName),
+				logger.String("model", model),
+				logger.String("task", string(task)),
 			)
-			return provider, nil
+			return provider, model, nil
 		}
 		if canopyerr.GetKind(err) != canopyerr.KindNotFound {
-			return nil, fmt.Errorf("resolve llm provider: user config: %w", err)
+			return nil, "", fmt.Errorf("resolve llm provider: user config: %w", err)
 		}
 		// User has no config — fall through to workspace.
 	}
@@ -285,30 +299,38 @@ func (r *llmProviderResolver) Resolve(ctx context.Context, workspaceID types.Wor
 	r.mu.RLock()
 	if p, ok := r.cache[wsCacheKey]; ok {
 		r.mu.RUnlock()
-		return p, nil
+		wsCfg, _ := r.wsConfigs.FindByWorkspace(ctx, workspaceID)
+		providerName := string(wsCfg.Provider())
+		model := r.router.Resolve(providerName, task, wsCfg.Model())
+		return p, model, nil
 	}
 	r.mu.RUnlock()
 
 	wsCfg, err := r.wsConfigs.FindByWorkspace(ctx, workspaceID)
 	if err != nil {
 		if canopyerr.GetKind(err) == canopyerr.KindNotFound {
-			return r.fallback, nil
+			model := r.router.Resolve(r.fallbackCfg.Provider, task, r.fallbackCfg.Model)
+			return r.fallback, model, nil
 		}
-		return nil, fmt.Errorf("resolve llm provider: %w", err)
+		return nil, "", fmt.Errorf("resolve llm provider: %w", err)
 	}
 
 	provider, err := r.createAndCache(ctx, wsCacheKey,
 		string(wsCfg.Provider()), wsCfg.Model(), wsCfg.APIKeyEnc())
 	if err != nil {
-		return nil, fmt.Errorf("resolve llm provider (workspace): %w", err)
+		return nil, "", fmt.Errorf("resolve llm provider (workspace): %w", err)
 	}
 
+	providerName := string(wsCfg.Provider())
+	model := r.router.Resolve(providerName, task, wsCfg.Model())
 	r.log.Debug("workspace llm provider cached",
 		logger.String("workspace_id", wsKey),
-		logger.String("provider", string(wsCfg.Provider())),
+		logger.String("provider", providerName),
+		logger.String("model", model),
+		logger.String("task", string(task)),
 	)
 
-	return provider, nil
+	return provider, model, nil
 }
 
 // createAndCache decrypts an API key, creates a provider, and caches it.

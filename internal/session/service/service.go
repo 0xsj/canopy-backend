@@ -179,13 +179,14 @@ func (s *Service) AddMessage(ctx context.Context, sessionID domain.SessionID, ms
 		llmMessages[i] = llm.Message{Role: m.Role, Content: m.Content}
 	}
 
-	provider, err := s.llm.Resolve(llmCtx, session.WorkspaceID())
+	provider, model, err := s.llm.Resolve(llmCtx, session.WorkspaceID(), taskTypeForSession(session.Type()))
 	if err != nil {
 		s.log.Error("llm resolve failed", logger.Err(err))
 		return session, canopyerr.Wrap(err, op)
 	}
 
 	resp, err := provider.ChatCompletion(llmCtx, llm.ChatRequest{
+		Model:    model,
 		Messages: llmMessages,
 	})
 	if err != nil {
@@ -285,7 +286,7 @@ func (s *Service) runStream(ctx context.Context, session domain.Session, streamI
 		llmMessages[i] = llm.Message{Role: m.Role, Content: m.Content}
 	}
 
-	provider, err := s.llm.Resolve(ctx, session.WorkspaceID())
+	provider, model, err := s.llm.Resolve(ctx, session.WorkspaceID(), taskTypeForSession(session.Type()))
 	if err != nil {
 		s.log.Error("stream: llm resolve failed", logger.Err(err))
 		_ = s.broadcaster.Send(wsID, llm.StreamMessage{
@@ -296,7 +297,7 @@ func (s *Service) runStream(ctx context.Context, session domain.Session, streamI
 		return
 	}
 
-	req := llm.ChatRequest{Messages: llmMessages}
+	req := llm.ChatRequest{Model: model, Messages: llmMessages}
 
 	// Try streaming; fall back to sync if provider doesn't support it.
 	sp, ok := provider.(llm.StreamProvider)
@@ -437,6 +438,25 @@ func (s *Service) CompleteSession(ctx context.Context, sessionID domain.SessionI
 	)
 
 	return session, nil
+}
+
+// --- Task Type Mapping ---
+
+// taskTypeForSession maps a session type to the corresponding LLM task type
+// for model tier routing.
+func taskTypeForSession(st domain.SessionType) llm.TaskType {
+	switch st {
+	case domain.SessionExploration:
+		return llm.TaskExploration
+	case domain.SessionShaping:
+		return llm.TaskShaping
+	case domain.SessionSynthesis:
+		return llm.TaskSynthesis
+	case domain.SessionDigest:
+		return llm.TaskDigest
+	default:
+		return llm.TaskExploration
+	}
 }
 
 // --- Auth Helpers ---

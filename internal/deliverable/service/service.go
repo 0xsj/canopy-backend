@@ -261,12 +261,13 @@ func (s *Service) GenerateDeliverable(
 
 	// Build prompt and call LLM.
 	systemPrompt := buildDeliverablePrompt(leaves, template, string(format))
-	provider, err := s.llm.Resolve(ctx, workspaceID)
+	provider, model, err := s.llm.Resolve(ctx, workspaceID, llm.TaskSynthesis)
 	if err != nil {
 		return domain.Deliverable{}, canopyerr.Wrap(fmt.Errorf("resolve llm: %w", err), op)
 	}
 
 	resp, err := provider.ChatCompletion(ctx, llm.ChatRequest{
+		Model: model,
 		Messages: []llm.Message{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: "Generate the deliverable document now."},

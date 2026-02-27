@@ -151,7 +151,8 @@ func main() {
 	discP := discussion.Wire(db, wsP.MemberRepo, pub, log)
 
 	// LLM resolver: user > workspace > server-wide fallback.
-	resolver := newLLMProviderResolver(wsP.LLMConfigRepo, identityP.LLMConfigRepo, cipher, llmProvider, log)
+	modelRouter := llm.NewModelRouter()
+	resolver := newLLMProviderResolver(wsP.LLMConfigRepo, identityP.LLMConfigRepo, cipher, llmProvider, llmCfg, modelRouter, log)
 
 	broadcaster := &streamBroadcasterAdapter{hub: hub}
 
