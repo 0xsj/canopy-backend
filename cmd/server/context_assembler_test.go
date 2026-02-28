@@ -359,3 +359,183 @@ func TestContextAssembler_EmptyConstraints_OmitsSection(t *testing.T) {
 func TestContextAssembler_ImplementsInterface(t *testing.T) {
 	var _ sessiondomain.ContextAssembler = (*contextAssembler)(nil)
 }
+
+// --- Budget tests ---
+
+func TestBudgetForSessionType_AllTypesReturnNonZero(t *testing.T) {
+	types := []sessiondomain.SessionType{
+		sessiondomain.SessionExploration,
+		sessiondomain.SessionShaping,
+		sessiondomain.SessionSynthesis,
+		sessiondomain.SessionDigest,
+	}
+	for _, st := range types {
+		b := budgetForSessionType(st)
+		if b.SystemPrompt == 0 {
+			t.Errorf("budgetForSessionType(%q).SystemPrompt = 0", st)
+		}
+		if b.History == 0 {
+			t.Errorf("budgetForSessionType(%q).History = 0", st)
+		}
+	}
+}
+
+func TestBudgetForSessionType_SynthesisHasLargestLeafBudget(t *testing.T) {
+	synth := budgetForSessionType(sessiondomain.SessionSynthesis)
+	explore := budgetForSessionType(sessiondomain.SessionExploration)
+	if synth.LeafContext <= explore.LeafContext {
+		t.Errorf("synthesis leaf budget (%d) should exceed exploration (%d)", synth.LeafContext, explore.LeafContext)
+	}
+}
+
+func TestBudgetForSessionType_ExplorationHasLargestHistoryBudget(t *testing.T) {
+	explore := budgetForSessionType(sessiondomain.SessionExploration)
+	synth := budgetForSessionType(sessiondomain.SessionSynthesis)
+	if explore.History <= synth.History {
+		t.Errorf("exploration history budget (%d) should exceed synthesis (%d)", explore.History, synth.History)
+	}
+}
+
+func TestBudgetForSessionType_DigestHasNoLeafBudget(t *testing.T) {
+	b := budgetForSessionType(sessiondomain.SessionDigest)
+	if b.LeafContext != 0 {
+		t.Errorf("digest leaf budget = %d, want 0", b.LeafContext)
+	}
+}
+
+func TestBudgetForSessionType_UnknownTypeReturnsDefault(t *testing.T) {
+	b := budgetForSessionType("unknown_type")
+	if b.SystemPrompt == 0 || b.History == 0 {
+		t.Error("unknown type should return non-zero default budget")
+	}
+}
+
+// --- Sliding window tests ---
+
+func TestSlidingWindowHistory_EmptyMessages(t *testing.T) {
+	result := slidingWindowHistory(nil, 1000)
+	if len(result) != 0 {
+		t.Errorf("len = %d, want 0", len(result))
+	}
+}
+
+func TestSlidingWindowHistory_AllFitWithinBudget(t *testing.T) {
+	msgs := []sessiondomain.Message{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "hi there"},
+		{Role: "user", Content: "how are you"},
+	}
+	result := slidingWindowHistory(msgs, 10000) // huge budget
+	if len(result) != 3 {
+		t.Errorf("len = %d, want 3 (all should fit)", len(result))
+	}
+}
+
+func TestSlidingWindowHistory_TrimsOlderMessages(t *testing.T) {
+	msgs := []sessiondomain.Message{
+		{Role: "user", Content: "this is the first message and it's quite long with many words to use up tokens"},
+		{Role: "assistant", Content: "this is the second message also with many words to use up budget tokens too"},
+		{Role: "user", Content: "short last"},
+	}
+	// Give a budget that fits the last 1-2 messages but not all 3.
+	// "short last" ≈ 3 tokens + 4 overhead = 7
+	// second msg ≈ ~20 tokens + 4 = 24
+	// first msg ≈ ~22 tokens + 4 = 26
+	// Budget of 35 should fit last 2 but not all 3.
+	result := slidingWindowHistory(msgs, 35)
+	if len(result) >= 3 {
+		t.Errorf("len = %d, want < 3 (should trim oldest)", len(result))
+	}
+	// Last message must always be preserved.
+	if result[len(result)-1].Content != "short last" {
+		t.Error("last message should always be preserved")
+	}
+}
+
+func TestSlidingWindowHistory_AlwaysPreservesLastMessage(t *testing.T) {
+	msgs := []sessiondomain.Message{
+		{Role: "user", Content: "first"},
+		{Role: "assistant", Content: "second"},
+		{Role: "user", Content: "this is a very long message that by itself exceeds any reasonable token budget we might set for testing purposes here"},
+	}
+	// Budget of 1 — can't even fit the last message, but it should still be kept.
+	result := slidingWindowHistory(msgs, 1)
+	if len(result) != 1 {
+		t.Errorf("len = %d, want 1 (only last message)", len(result))
+	}
+	if result[0].Content != msgs[2].Content {
+		t.Error("should preserve the last message even when over budget")
+	}
+}
+
+func TestSlidingWindowHistory_ZeroBudgetReturnsAll(t *testing.T) {
+	msgs := []sessiondomain.Message{
+		{Role: "user", Content: "hello"},
+	}
+	// Zero budget returns messages as-is (no windowing).
+	result := slidingWindowHistory(msgs, 0)
+	if len(result) != 1 {
+		t.Errorf("len = %d, want 1", len(result))
+	}
+}
+
+func TestSlidingWindowHistory_PreservesOrder(t *testing.T) {
+	msgs := []sessiondomain.Message{
+		{Role: "user", Content: "first"},
+		{Role: "assistant", Content: "second"},
+		{Role: "user", Content: "third"},
+		{Role: "assistant", Content: "fourth"},
+		{Role: "user", Content: "fifth"},
+	}
+	result := slidingWindowHistory(msgs, 10000)
+	for i, m := range result {
+		if m.Content != msgs[i].Content {
+			t.Errorf("result[%d] = %q, want %q", i, m.Content, msgs[i].Content)
+		}
+	}
+}
+
+// --- Integration: assembler applies sliding window ---
+
+func TestContextAssembler_TrimsLongConversation(t *testing.T) {
+	a := &contextAssembler{
+		seeds:  &stubSeedFinder{seed: testSeed()},
+		leaves: &stubLeafFinder{},
+		log:    logger.NewNoop(),
+	}
+
+	// Build a conversation with 50 messages — way more than any budget.
+	var conversation []sessiondomain.Message
+	for i := 0; i < 50; i++ {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		conversation = append(conversation, sessiondomain.Message{
+			Role:    role,
+			Content: strings.Repeat("word ", 100), // ~133 tokens each
+		})
+	}
+
+	session := testSession(sessiondomain.SessionExploration, types.LeafID{}, conversation)
+
+	messages, err := a.Assemble(context.Background(), session)
+	if err != nil {
+		t.Fatalf("Assemble() error = %v", err)
+	}
+
+	// Should have system message + fewer than 50 conversation messages.
+	conversationCount := len(messages) - 1
+	if conversationCount >= 50 {
+		t.Errorf("expected trimmed conversation, got %d messages (all 50)", conversationCount)
+	}
+	if conversationCount == 0 {
+		t.Error("should preserve at least 1 conversation message")
+	}
+
+	// Last conversation message should be the 50th (most recent).
+	last := messages[len(messages)-1]
+	if last.Content != conversation[49].Content {
+		t.Error("most recent message should be preserved")
+	}
+}

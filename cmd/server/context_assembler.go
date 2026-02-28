@@ -9,9 +9,63 @@ import (
 	expdomain "github.com/0xsj/canopy-backend/internal/exploration/domain"
 	seeddomain "github.com/0xsj/canopy-backend/internal/seed/domain"
 	sessiondomain "github.com/0xsj/canopy-backend/internal/session/domain"
+	"github.com/0xsj/canopy-backend/pkg/llm"
 	"github.com/0xsj/canopy-backend/pkg/observability/logger"
 	"github.com/0xsj/canopy-backend/pkg/types"
 )
+
+// contextBudget defines token limits per section of the assembled context.
+// These are soft limits — the assembler truncates content to fit.
+type contextBudget struct {
+	SystemPrompt int // base prompt (role description, instructions)
+	SeedContext  int // seed title, description, constraints
+	LeafContext  int // parent leaf or source leaves
+	History      int // conversation history (sliding window)
+}
+
+// budgetForSessionType returns the default token budget per session type.
+// Budgets are tuned for a ~8k total context window. Models with larger
+// windows will have headroom; models with smaller windows are protected
+// from overflows.
+func budgetForSessionType(st sessiondomain.SessionType) contextBudget {
+	switch st {
+	case sessiondomain.SessionExploration:
+		return contextBudget{
+			SystemPrompt: 600,
+			SeedContext:  500,
+			LeafContext:  800,  // parent leaf only
+			History:      4000, // interactive — keep more history
+		}
+	case sessiondomain.SessionShaping:
+		return contextBudget{
+			SystemPrompt: 600,
+			SeedContext:  400,
+			LeafContext:  600,  // parent leaf only
+			History:      4000, // interactive refinement
+		}
+	case sessiondomain.SessionSynthesis:
+		return contextBudget{
+			SystemPrompt: 600,
+			SeedContext:  400,
+			LeafContext:  4000, // multiple source leaves — needs most space
+			History:      1000, // minimal history
+		}
+	case sessiondomain.SessionDigest:
+		return contextBudget{
+			SystemPrompt: 600,
+			SeedContext:  500,
+			LeafContext:  0,    // no leaves
+			History:      3000, // moderate history
+		}
+	default:
+		return contextBudget{
+			SystemPrompt: 600,
+			SeedContext:  500,
+			LeafContext:  800,
+			History:      4000,
+		}
+	}
+}
 
 // seedFinder reads seed data for context assembly. Satisfied by postgres.SeedRepository.
 type seedFinder interface {
@@ -33,13 +87,15 @@ type contextAssembler struct {
 }
 
 func (a *contextAssembler) Assemble(ctx context.Context, session sessiondomain.Session) ([]sessiondomain.Message, error) {
+	budget := budgetForSessionType(session.Type())
+
 	// Load seed context — every session has a seed.
 	seed, err := a.seeds.FindByID(ctx, session.SeedID())
 	if err != nil {
 		return nil, fmt.Errorf("context assembler: load seed: %w", err)
 	}
 
-	// Load parent leaf if present.
+	// Load parent leaf if present (exploration/shaping only).
 	var parentLeaf *expdomain.Leaf
 	if !session.ParentLeafID().IsZero() {
 		leaf, err := a.leaves.FindByID(ctx, session.ParentLeafID())
@@ -65,7 +121,7 @@ func (a *contextAssembler) Assemble(ctx context.Context, session sessiondomain.S
 		}
 	}
 
-	// Build system prompt based on session type.
+	// Build system prompt based on session type, applying token budgets.
 	var systemPrompt string
 	switch session.Type() {
 	case sessiondomain.SessionExploration:
@@ -80,15 +136,66 @@ func (a *contextAssembler) Assemble(ctx context.Context, session sessiondomain.S
 		systemPrompt = buildExplorationPrompt(seed, parentLeaf)
 	}
 
-	// Assemble: system message + conversation history.
-	messages := make([]sessiondomain.Message, 0, 1+len(session.Messages()))
+	// Truncate system prompt if it exceeds its budget.
+	promptBudget := budget.SystemPrompt + budget.SeedContext + budget.LeafContext
+	systemPrompt = llm.TruncateToTokenBudget(systemPrompt, promptBudget)
+
+	// Build sliding window of conversation history.
+	history := slidingWindowHistory(session.Messages(), budget.History)
+
+	// Assemble: system message + windowed history.
+	messages := make([]sessiondomain.Message, 0, 1+len(history))
 	messages = append(messages, sessiondomain.Message{
 		Role:    "system",
 		Content: systemPrompt,
 	})
-	messages = append(messages, session.Messages()...)
+	messages = append(messages, history...)
+
+	// Log token usage for observability.
+	systemTokens := llm.EstimateTokens(systemPrompt)
+	historyTokens := 0
+	for _, m := range history {
+		historyTokens += llm.EstimateTokens(m.Content) + 4
+	}
+	totalMessages := len(session.Messages())
+	windowedMessages := len(history)
+
+	a.log.Debug("context assembled",
+		logger.String("session_type", string(session.Type())),
+		logger.Int("system_tokens", systemTokens),
+		logger.Int("history_tokens", historyTokens),
+		logger.Int("total_tokens", systemTokens+historyTokens),
+		logger.Int("total_messages", totalMessages),
+		logger.Int("windowed_messages", windowedMessages),
+		logger.Int("messages_trimmed", totalMessages-windowedMessages),
+	)
 
 	return messages, nil
+}
+
+// slidingWindowHistory keeps the most recent messages that fit within the
+// token budget. Always preserves the last message (the current user turn).
+// Walks backward from the end, accumulating messages until the budget is
+// exhausted.
+func slidingWindowHistory(messages []sessiondomain.Message, budget int) []sessiondomain.Message {
+	if len(messages) == 0 || budget <= 0 {
+		return messages
+	}
+
+	used := 0
+	startIdx := len(messages) // will walk backward
+
+	for i := len(messages) - 1; i >= 0; i-- {
+		msgTokens := llm.EstimateTokens(messages[i].Content) + 4 // +4 per-message overhead
+		if used+msgTokens > budget && i < len(messages)-1 {
+			// Would exceed budget and we already have at least the last message.
+			break
+		}
+		used += msgTokens
+		startIdx = i
+	}
+
+	return messages[startIdx:]
 }
 
 func buildExplorationPrompt(seed seeddomain.Seed, parentLeaf *expdomain.Leaf) string {

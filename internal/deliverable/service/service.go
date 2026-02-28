@@ -266,6 +266,12 @@ func (s *Service) GenerateDeliverable(
 		return domain.Deliverable{}, canopyerr.Wrap(fmt.Errorf("resolve llm: %w", err), op)
 	}
 
+	s.log.Debug("deliverable llm resolved",
+		logger.String("model", model),
+		logger.String("task", string(llm.TaskSynthesis)),
+		logger.Int("source_leaves", len(leaves)),
+	)
+
 	resp, err := provider.ChatCompletion(ctx, llm.ChatRequest{
 		Model: model,
 		Messages: []llm.Message{

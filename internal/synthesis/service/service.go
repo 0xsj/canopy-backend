@@ -210,6 +210,13 @@ func (s *Service) runSynthesisStream(
 		return
 	}
 
+	s.log.Debug("synthesis llm resolved",
+		logger.String("synthesis_id", streamID),
+		logger.String("model", model),
+		logger.String("task", string(llm.TaskSynthesis)),
+		logger.Int("source_leaves", len(sourceLeaves)),
+	)
+
 	req := llm.ChatRequest{
 		Model: model,
 		Messages: []llm.Message{

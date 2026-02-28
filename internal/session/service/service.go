@@ -206,6 +206,8 @@ func (s *Service) AddMessage(ctx context.Context, sessionID domain.SessionID, ms
 
 	s.log.Debug("llm response added",
 		logger.String("session_id", sessionID.String()),
+		logger.String("model", model),
+		logger.String("task", string(taskTypeForSession(session.Type()))),
 		logger.Int("input_tokens", resp.Usage.InputTokens),
 		logger.Int("output_tokens", resp.Usage.OutputTokens),
 	)

@@ -152,7 +152,8 @@ func main() {
 
 	// LLM resolver: user > workspace > server-wide fallback.
 	modelRouter := llm.NewModelRouter()
-	resolver := newLLMProviderResolver(wsP.LLMConfigRepo, identityP.LLMConfigRepo, cipher, llmProvider, llmCfg, modelRouter, log)
+	respCache := llm.NewMemoryCache(500)
+	resolver := newLLMProviderResolver(wsP.LLMConfigRepo, identityP.LLMConfigRepo, cipher, llmProvider, llmCfg, modelRouter, respCache, log)
 
 	broadcaster := &streamBroadcasterAdapter{hub: hub}
 

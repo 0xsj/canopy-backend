@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -224,6 +225,8 @@ type llmProviderResolver struct {
 	fallback    llm.Provider
 	router      *llm.ModelRouter
 	fallbackCfg llm.Config // server-wide config (for provider name + model fallback)
+	respCache   llm.ResponseCache
+	respTTL     time.Duration
 	log         logger.Logger
 
 	mu    sync.RWMutex
@@ -237,6 +240,7 @@ func newLLMProviderResolver(
 	fallback llm.Provider,
 	fallbackCfg llm.Config,
 	router *llm.ModelRouter,
+	respCache llm.ResponseCache,
 	log logger.Logger,
 ) *llmProviderResolver {
 	return &llmProviderResolver{
@@ -246,6 +250,8 @@ func newLLMProviderResolver(
 		fallback:    fallback,
 		fallbackCfg: fallbackCfg,
 		router:      router,
+		respCache:   respCache,
+		respTTL:     10 * time.Minute,
 		log:         log,
 		cache:       make(map[string]llm.Provider),
 	}
@@ -266,7 +272,7 @@ func (r *llmProviderResolver) Resolve(ctx context.Context, workspaceID types.Wor
 			userCfg, _ := r.userConfigs.FindByUser(ctx, userID)
 			providerName := string(userCfg.Provider())
 			model := r.router.Resolve(providerName, task, userCfg.Model())
-			return p, model, nil
+			return r.withResponseCache(p), model, nil
 		}
 		r.mu.RUnlock()
 
@@ -285,7 +291,7 @@ func (r *llmProviderResolver) Resolve(ctx context.Context, workspaceID types.Wor
 				logger.String("model", model),
 				logger.String("task", string(task)),
 			)
-			return provider, model, nil
+			return r.withResponseCache(provider), model, nil
 		}
 		if canopyerr.GetKind(err) != canopyerr.KindNotFound {
 			return nil, "", fmt.Errorf("resolve llm provider: user config: %w", err)
@@ -302,7 +308,7 @@ func (r *llmProviderResolver) Resolve(ctx context.Context, workspaceID types.Wor
 		wsCfg, _ := r.wsConfigs.FindByWorkspace(ctx, workspaceID)
 		providerName := string(wsCfg.Provider())
 		model := r.router.Resolve(providerName, task, wsCfg.Model())
-		return p, model, nil
+		return r.withResponseCache(p), model, nil
 	}
 	r.mu.RUnlock()
 
@@ -310,7 +316,7 @@ func (r *llmProviderResolver) Resolve(ctx context.Context, workspaceID types.Wor
 	if err != nil {
 		if canopyerr.GetKind(err) == canopyerr.KindNotFound {
 			model := r.router.Resolve(r.fallbackCfg.Provider, task, r.fallbackCfg.Model)
-			return r.fallback, model, nil
+			return r.withResponseCache(r.fallback), model, nil
 		}
 		return nil, "", fmt.Errorf("resolve llm provider: %w", err)
 	}
@@ -330,7 +336,15 @@ func (r *llmProviderResolver) Resolve(ctx context.Context, workspaceID types.Wor
 		logger.String("task", string(task)),
 	)
 
-	return provider, model, nil
+	return r.withResponseCache(provider), model, nil
+}
+
+// withResponseCache wraps a provider with response caching if a cache is configured.
+func (r *llmProviderResolver) withResponseCache(p llm.Provider) llm.Provider {
+	if r.respCache == nil {
+		return p
+	}
+	return llm.NewCachedProvider(p, r.respCache, r.respTTL)
 }
 
 // createAndCache decrypts an API key, creates a provider, and caches it.

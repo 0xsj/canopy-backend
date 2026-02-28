@@ -39,8 +39,10 @@ type Options struct {
 
 // Usage reports token consumption for metering and observability.
 type Usage struct {
-	InputTokens  int
-	OutputTokens int
+	InputTokens         int
+	OutputTokens        int
+	CacheCreationTokens int // tokens used to create a new cache entry (Anthropic)
+	CacheReadTokens     int // tokens served from cache (Anthropic, OpenAI)
 }
 
 // StreamChunk carries a single token or completion signal from a streaming LLM call.
