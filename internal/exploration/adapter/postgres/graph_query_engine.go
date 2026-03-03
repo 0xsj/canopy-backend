@@ -25,11 +25,11 @@ var _ domain.GraphQueryEngine = (*GraphQueryEngine)(nil)
 
 // leafCols is the unqualified column list matching sqlc.Leafe field order.
 const leafCols = `id, workspace_id, seed_id, branch_id, author_id, parent_leaf_id,
-    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at, position_x, position_y`
+    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at, position_x, position_y, search_vector`
 
 // leafColsL is the same column list qualified with table alias "l." for use in JOINs.
 const leafColsL = `l.id, l.workspace_id, l.seed_id, l.branch_id, l.author_id, l.parent_leaf_id,
-    l.title, l.summary, l.key_points, l.open_questions, l.tags, l.layer, l.sources, l.metadata, l.created_at, l.position_x, l.position_y`
+    l.title, l.summary, l.key_points, l.open_questions, l.tags, l.layer, l.sources, l.metadata, l.created_at, l.position_x, l.position_y, l.search_vector`
 
 // Ancestors returns all ancestor leaves back to the seed root by walking
 // the parent_leaf_id chain upward using a recursive CTE.
@@ -197,7 +197,7 @@ func scanLeaves(rows interface {
 		if err := rows.Scan(
 			&m.ID, &m.WorkspaceID, &m.SeedID, &m.BranchID, &m.AuthorID, &m.ParentLeafID,
 			&m.Title, &m.Summary, &m.KeyPoints, &m.OpenQuestions, &m.Tags,
-			&m.Layer, &m.Sources, &m.Metadata, &m.CreatedAt, &m.PositionX, &m.PositionY,
+			&m.Layer, &m.Sources, &m.Metadata, &m.CreatedAt, &m.PositionX, &m.PositionY, &m.SearchVector,
 		); err != nil {
 			return nil, err
 		}

@@ -35,6 +35,10 @@ type LeafRepository interface {
 	// UpdatePosition sets a leaf's canvas position. This is a presentation
 	// concern and does not affect content immutability.
 	UpdatePosition(ctx context.Context, id types.LeafID, x, y float64) error
+
+	// Search performs full-text search across leaf content within a workspace.
+	// Results are ranked by relevance (title > summary > key_points > open_questions).
+	Search(ctx context.Context, workspaceID types.WorkspaceID, query string) ([]Leaf, error)
 }
 
 // LeafFilter provides optional filtering for workspace leaf queries.

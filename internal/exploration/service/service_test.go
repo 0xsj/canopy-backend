@@ -38,6 +38,9 @@ func (s *stubLeafRepo) UpdateLayer(_ context.Context, _ types.LeafID, _ domain.L
 func (s *stubLeafRepo) UpdatePosition(_ context.Context, _ types.LeafID, _, _ float64) error {
 	return nil
 }
+func (s *stubLeafRepo) Search(_ context.Context, _ types.WorkspaceID, _ string) ([]domain.Leaf, error) {
+	return nil, nil
+}
 
 type stubBranchRepo struct{}
 

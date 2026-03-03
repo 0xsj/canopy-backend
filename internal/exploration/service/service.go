@@ -134,6 +134,21 @@ func (s *Service) FindLeavesByWorkspace(ctx context.Context, workspaceID types.W
 	return leaves, nil
 }
 
+// SearchLeaves performs full-text search across leaf content within a workspace.
+func (s *Service) SearchLeaves(ctx context.Context, workspaceID types.WorkspaceID, query string) ([]domain.Leaf, error) {
+	const op = "exploration: search leaves"
+
+	if _, err := s.requireMember(ctx, workspaceID); err != nil {
+		return nil, canopyerr.Wrap(err, op)
+	}
+
+	leaves, err := s.leaves.Search(ctx, workspaceID, query)
+	if err != nil {
+		return nil, canopyerr.Wrap(err, op)
+	}
+	return leaves, nil
+}
+
 // StartBranch creates a branch and its first leaf atomically.
 func (s *Service) StartBranch(
 	ctx context.Context,

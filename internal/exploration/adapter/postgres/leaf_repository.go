@@ -111,6 +111,22 @@ func (r *LeafRepository) UpdateLayer(ctx context.Context, id types.LeafID, layer
 	return nil
 }
 
+func (r *LeafRepository) Search(ctx context.Context, workspaceID types.WorkspaceID, query string) ([]domain.Leaf, error) {
+	const op = "exploration: search leaves"
+	rows, err := r.q.SearchLeavesByWorkspace(ctx, sqlc.SearchLeavesByWorkspaceParams{
+		WorkspaceID:    workspaceID.String(),
+		PlaintoTsquery: query,
+	})
+	if err != nil {
+		return nil, database.MapQueryError(err, op)
+	}
+	leaves, err := leavesToDomain(rows)
+	if err != nil {
+		return nil, database.MapQueryError(err, op)
+	}
+	return leaves, nil
+}
+
 func (r *LeafRepository) UpdatePosition(ctx context.Context, id types.LeafID, x, y float64) error {
 	const op = "exploration: update leaf position"
 	tag, err := r.q.UpdateLeafPosition(ctx, sqlc.UpdateLeafPositionParams{

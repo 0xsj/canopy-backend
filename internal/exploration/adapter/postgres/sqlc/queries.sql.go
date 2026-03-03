@@ -320,7 +320,7 @@ func (q *Queries) FindConnectionsByWorkspace(ctx context.Context, workspaceID st
 
 const findLeafByID = `-- name: FindLeafByID :one
 SELECT id, workspace_id, seed_id, branch_id, author_id, parent_leaf_id,
-    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at, position_x, position_y
+    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at, position_x, position_y, search_vector
 FROM leaves WHERE id = $1
 `
 
@@ -345,13 +345,14 @@ func (q *Queries) FindLeafByID(ctx context.Context, id string) (Leafe, error) {
 		&i.CreatedAt,
 		&i.PositionX,
 		&i.PositionY,
+		&i.SearchVector,
 	)
 	return i, err
 }
 
 const findLeavesByBranch = `-- name: FindLeavesByBranch :many
 SELECT id, workspace_id, seed_id, branch_id, author_id, parent_leaf_id,
-    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at, position_x, position_y
+    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at, position_x, position_y, search_vector
 FROM leaves WHERE branch_id = $1 ORDER BY created_at
 `
 
@@ -382,6 +383,7 @@ func (q *Queries) FindLeavesByBranch(ctx context.Context, branchID string) ([]Le
 			&i.CreatedAt,
 			&i.PositionX,
 			&i.PositionY,
+			&i.SearchVector,
 		); err != nil {
 			return nil, err
 		}
@@ -395,7 +397,7 @@ func (q *Queries) FindLeavesByBranch(ctx context.Context, branchID string) ([]Le
 
 const findLeavesByIDs = `-- name: FindLeavesByIDs :many
 SELECT id, workspace_id, seed_id, branch_id, author_id, parent_leaf_id,
-    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at, position_x, position_y
+    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at, position_x, position_y, search_vector
 FROM leaves WHERE id = ANY($1::text[])
 `
 
@@ -426,6 +428,7 @@ func (q *Queries) FindLeavesByIDs(ctx context.Context, dollar_1 []string) ([]Lea
 			&i.CreatedAt,
 			&i.PositionX,
 			&i.PositionY,
+			&i.SearchVector,
 		); err != nil {
 			return nil, err
 		}
@@ -439,7 +442,7 @@ func (q *Queries) FindLeavesByIDs(ctx context.Context, dollar_1 []string) ([]Lea
 
 const findLeavesBySeed = `-- name: FindLeavesBySeed :many
 SELECT id, workspace_id, seed_id, branch_id, author_id, parent_leaf_id,
-    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at, position_x, position_y
+    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at, position_x, position_y, search_vector
 FROM leaves WHERE seed_id = $1 ORDER BY created_at
 `
 
@@ -470,6 +473,7 @@ func (q *Queries) FindLeavesBySeed(ctx context.Context, seedID string) ([]Leafe,
 			&i.CreatedAt,
 			&i.PositionX,
 			&i.PositionY,
+			&i.SearchVector,
 		); err != nil {
 			return nil, err
 		}
@@ -483,7 +487,7 @@ func (q *Queries) FindLeavesBySeed(ctx context.Context, seedID string) ([]Leafe,
 
 const findLeavesByWorkspace = `-- name: FindLeavesByWorkspace :many
 SELECT id, workspace_id, seed_id, branch_id, author_id, parent_leaf_id,
-    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at, position_x, position_y
+    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at, position_x, position_y, search_vector
 FROM leaves
 WHERE workspace_id = $1
   AND ($2::text IS NULL OR author_id = $2)
@@ -534,6 +538,60 @@ func (q *Queries) FindLeavesByWorkspace(ctx context.Context, arg FindLeavesByWor
 			&i.CreatedAt,
 			&i.PositionX,
 			&i.PositionY,
+			&i.SearchVector,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchLeavesByWorkspace = `-- name: SearchLeavesByWorkspace :many
+SELECT id, workspace_id, seed_id, branch_id, author_id, parent_leaf_id,
+    title, summary, key_points, open_questions, tags, layer, sources, metadata, created_at, position_x, position_y, search_vector
+FROM leaves
+WHERE workspace_id = $1
+  AND search_vector @@ plainto_tsquery('english', $2)
+ORDER BY ts_rank(search_vector, plainto_tsquery('english', $2)) DESC
+`
+
+type SearchLeavesByWorkspaceParams struct {
+	WorkspaceID    string
+	PlaintoTsquery string
+}
+
+func (q *Queries) SearchLeavesByWorkspace(ctx context.Context, arg SearchLeavesByWorkspaceParams) ([]Leafe, error) {
+	rows, err := q.db.Query(ctx, searchLeavesByWorkspace, arg.WorkspaceID, arg.PlaintoTsquery)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Leafe{}
+	for rows.Next() {
+		var i Leafe
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.SeedID,
+			&i.BranchID,
+			&i.AuthorID,
+			&i.ParentLeafID,
+			&i.Title,
+			&i.Summary,
+			&i.KeyPoints,
+			&i.OpenQuestions,
+			&i.Tags,
+			&i.Layer,
+			&i.Sources,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.PositionX,
+			&i.PositionY,
+			&i.SearchVector,
 		); err != nil {
 			return nil, err
 		}

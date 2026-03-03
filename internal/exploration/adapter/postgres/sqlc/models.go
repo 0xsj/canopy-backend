@@ -44,4 +44,5 @@ type Leafe struct {
 	CreatedAt     time.Time
 	PositionX     float64
 	PositionY     float64
+	SearchVector  interface{}
 }

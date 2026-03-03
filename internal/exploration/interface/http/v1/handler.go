@@ -99,6 +99,17 @@ func (h *Handler) handleListLeaves(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Full-text search — short-circuit before filter logic
+	if query := httpserver.QueryString(r, "search", ""); query != "" {
+		leaves, err := h.svc.SearchLeaves(r.Context(), wsID, query)
+		if err != nil {
+			httpserver.WriteServiceError(w, h.log, err)
+			return
+		}
+		types.WriteOK(w, LeavesFromDomain(leaves))
+		return
+	}
+
 	filter := domain.LeafFilter{}
 
 	if raw := httpserver.QueryString(r, "seed_id", ""); raw != "" {

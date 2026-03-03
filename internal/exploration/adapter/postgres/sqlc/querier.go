@@ -29,6 +29,7 @@ type Querier interface {
 	FindLeavesByIDs(ctx context.Context, dollar_1 []string) ([]Leafe, error)
 	FindLeavesBySeed(ctx context.Context, seedID string) ([]Leafe, error)
 	FindLeavesByWorkspace(ctx context.Context, arg FindLeavesByWorkspaceParams) ([]Leafe, error)
+	SearchLeavesByWorkspace(ctx context.Context, arg SearchLeavesByWorkspaceParams) ([]Leafe, error)
 	UpdateBranch(ctx context.Context, arg UpdateBranchParams) (pgconn.CommandTag, error)
 	UpdateLeafLayer(ctx context.Context, arg UpdateLeafLayerParams) (pgconn.CommandTag, error)
 	UpdateLeafPosition(ctx context.Context, arg UpdateLeafPositionParams) (pgconn.CommandTag, error)
