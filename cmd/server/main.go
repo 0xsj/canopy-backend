@@ -201,10 +201,7 @@ func main() {
 		httpserver.JSON(w, status, report)
 	})
 
-	// WebSocket — own auth (not behind API middleware).
-	mux.Handle("GET /ws", websocket.Handler(hub, upgrader, log))
-
-	// API — all routes behind auth middleware.
+	// Auth validator — shared by API middleware and WebSocket handler.
 	var validator auth.TokenValidator
 	if authCfg.IsDev() {
 		log.Warn("auth: using static dev validator — NOT FOR PRODUCTION")
@@ -216,6 +213,9 @@ func main() {
 		validator = auth.NewJWKSValidator(authCfg)
 		log.Info("auth: using JWKS validator", logger.String("issuer", authCfg.Issuer))
 	}
+
+	// WebSocket — validates token via query param (before upgrade).
+	mux.Handle("GET /ws", websocket.Handler(hub, upgrader, validator, log))
 
 	apiMux := http.NewServeMux()
 	identityP.Handler.Register(apiMux)
